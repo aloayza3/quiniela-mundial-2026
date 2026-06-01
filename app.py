@@ -4,7 +4,7 @@ import os
 import pandas as pd
 
 # --- CONFIGURACIÓN DE DATOS ---
-DATA_FILE = "quiniela_2026_auto.json"
+DATA_FILE = "quiniela_2026_pro.json"
 
 GRUPOS_EQUIPOS = {
     "Grupo A": ["México", "Sudáfrica", "Corea del Sur", "Chequia"],
@@ -21,7 +21,6 @@ GRUPOS_EQUIPOS = {
     "Grupo L": ["Inglaterra", "Croacia", "Ghana", "Panamá"]
 }
 
-# Definición de partidos por grupo (Fixture entregado)
 PARTIDOS_GRUPOS = {
     "Grupo A": [("México", "Sudáfrica"), ("Corea del Sur", "Chequia"), ("Chequia", "Sudáfrica"), ("México", "Corea del Sur"), ("Chequia", "México"), ("Sudáfrica", "Corea del Sur")],
     "Grupo B": [("Canadá", "Bosnia y Herzegovina"), ("Catar", "Suiza"), ("Suiza", "Bosnia y Herzegovina"), ("Canadá", "Catar"), ("Suiza", "Canadá"), ("Bosnia y Herzegovina", "Catar")],
@@ -37,169 +36,300 @@ PARTIDOS_GRUPOS = {
     "Grupo L": [("Inglaterra", "Croacia"), ("Ghana", "Panamá"), ("Panamá", "Croacia"), ("Inglaterra", "Ghana"), ("Panamá", "Inglaterra"), ("Croacia", "Ghana")]
 }
 
-# --- LÓGICA DE PERSISTENCIA ---
+# --- PERSISTENCIA Y ESQUEMA ---
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f: return json.load(f)
-    return {"users": {}, "real_results": {}}
+    return {"users": {}, "real_results": {"group_results": {}, "ko_results": {}}}
 
 def save_data(data):
     with open(DATA_FILE, "w") as f: json.dump(data, f, indent=4)
 
-# --- PROCESAMIENTO DE TABLAS ---
-def get_group_table(grupo_nombre, resultados_reales):
-    equipos = {e: {"Pts": 0, "PJ": 0, "GF": 0, "GC": 0, "GD": 0} for e in GRUPOS_EQUIPOS[grupo_nombre]}
-    for i, (loc, vis) in enumerate(PARTIDOS_GRUPOS[grupo_nombre]):
-        m_id = f"{grupo_nombre}_{i}"
-        if m_id in resultados_reales:
-            l_score = resultados_reales[m_id]["l"]
-            v_score = resultados_reales[m_id]["v"]
-            equipos[loc]["PJ"] += 1
-            equipos[vis]["PJ"] += 1
-            equipos[loc]["GF"] += l_score
-            equipos[loc]["GC"] += v_score
-            equipos[vis]["GF"] += v_score
-            equipos[vis]["GC"] += l_score
-            if l_score > v_score: equipos[loc]["Pts"] += 3
-            elif l_score < v_score: equipos[vis]["Pts"] += 3
-            else:
-                equipos[loc]["Pts"] += 1
-                equipos[vis]["Pts"] += 1
-    
-    for e in equipos: equipos[e]["GD"] = equipos[e]["GF"] - equipos[e]["GC"]
-    
-    df = pd.DataFrame.from_dict(equipos, orient='index').reset_index()
-    df.columns = ["Equipo", "Pts", "PJ", "GF", "GC", "GD"]
-    return df.sort_values(by=["Pts", "GD", "GF"], ascending=False).reset_index(drop=True)
+# --- PROCESAMIENTO DE MATRICES ---
+def get_all_group_tables(resultados_dict):
+    tables = {}
+    thirds = []
+    for g in GRUPOS_EQUIPOS.keys():
+        equipos = {e: {"Pts": 0, "PJ": 0, "GF": 0, "GC": 0, "GD": 0} for e in GRUPOS_EQUIPOS[g]}
+        for i, (loc, vis) in enumerate(PARTIDOS_GRUPOS[g]):
+            m_id = f"{g}_{i}"
+            if m_id in resultados_dict:
+                l_score = resultados_dict[m_id]["l"]
+                v_score = resultados_dict[m_id]["v"]
+                equipos[loc]["PJ"] += 1; equipos[vis]["PJ"] += 1
+                equipos[loc]["GF"] += l_score; equipos[loc]["GC"] += v_score
+                equipos[vis]["GF"] += v_score; equipos[vis]["GC"] += l_score
+                if l_score > v_score: equipos[loc]["Pts"] += 3
+                elif l_score < v_score: equipos[vis]["Pts"] += 3
+                else: equipos[loc]["Pts"] += 1; equipos[vis]["Pts"] += 1
+        for e in equipos: equipos[e]["GD"] = equipos[e]["GF"] - equipos[e]["GC"]
+        df = pd.DataFrame.from_dict(equipos, orient='index').reset_index()
+        df.columns = ["Equipo", "Pts", "PJ", "GF", "GC", "GD"]
+        df = df.sort_values(by=["Pts", "GD", "GF"], ascending=False).reset_index(drop=True)
+        tables[g] = df
+        if len(df) >= 3:
+            tercero = df.iloc[2].to_dict()
+            tercero["Grupo"] = g
+            thirds.append(tercero)
+            
+    df_thirds = pd.DataFrame(thirds).sort_values(by=["Pts", "GD", "GF"], ascending=False).reset_index(drop=True)
+    best_thirds_list = df_thirds.head(8)["Equipo"].tolist() if not df_thirds.empty else []
+    return tables, best_thirds_list, df_thirds
 
-# --- INTERFAZ ---
-st.set_page_config(page_title="Prode Mundial 2026", layout="wide")
-data = load_data()
+def get_winner(match_data, team_l, team_v):
+    if not match_data: return "Por definir"
+    l_score, v_score = match_data.get("l", 0), match_data.get("v", 0)
+    if l_score > v_score: return team_l
+    elif l_score < v_score: return team_v
+    return team_l if match_data.get("avanza", "L") == "L" else team_v
 
-st.sidebar.title("⚽ Panel de Control")
-user = st.sidebar.text_input("Tu nombre:")
-admin_mode = st.sidebar.toggle("Modo Administrador")
-
-if not user:
-    st.warning("Escribe tu nombre para participar.")
-    st.stop()
-
-if user not in data["users"]:
-    data["users"][user] = {}
-    save_data(data)
-
-t1, t2, t3, t4 = st.tabs(["📋 Mis Predicciones", "📊 Tablas de Grupos", "🏆 Dieciseisavos (Auto)", "🥇 Ranking Polla"])
-
-# --- T1: PREDICCIONES ---
-with t1:
-    st.header(f"Predicciones de {user}")
-    g_sel = st.selectbox("Grupo:", list(PARTIDOS_GRUPOS.keys()))
-    with st.form(f"f_{g_sel}"):
-        for i, (l, v) in enumerate(PARTIDOS_GRUPOS[g_sel]):
-            m_id = f"{g_sel}_{i}"
-            cur = data["users"][user].get(m_id, {"l": 0, "v": 0})
-            c1, c2, c3, c4, c5 = st.columns([3,1,1,1,3])
-            c1.write(l)
-            l_in = c2.number_input("", 0, 15, cur["l"], key=f"up_l_{m_id}", label_visibility="collapsed")
-            c3.write("vs")
-            v_in = c4.number_input("", 0, 15, cur["v"], key=f"up_v_{m_id}", label_visibility="collapsed")
-            c5.write(v)
-        if st.form_submit_button("Guardar"):
-            for i, _ in enumerate(PARTIDOS_GRUPOS[g_sel]):
-                m_id = f"{g_sel}_{i}"
-                data["users"][user][m_id] = {"l": st.session_state[f"up_l_{m_id}"], "v": st.session_state[f"up_v_{m_id}"]}
-            save_data(data)
-            st.success("Guardado.")
-
-# --- T2: TABLAS Y ADMIN ---
-with t2:
-    if admin_mode:
-        st.subheader("⚠️ Cargar Resultados REALES (Admin)")
-        g_adm = st.selectbox("Actualizar Grupo:", list(PARTIDOS_GRUPOS.keys()), key="sadm")
-        with st.form("f_adm"):
-            for i, (l, v) in enumerate(PARTIDOS_GRUPOS[g_adm]):
-                m_id = f"{g_adm}_{i}"
-                cur = data["real_results"].get(m_id, {"l": 0, "v": 0})
-                c1, c2, c3, c4, c5 = st.columns([3,1,1,1,3])
-                c1.write(l); l_a = c2.number_input("", 0, 15, cur["l"], key=f"ar_l_{m_id}", label_visibility="collapsed")
-                c3.write("-"); v_a = c4.number_input("", 0, 15, cur["v"], key=f"ar_v_{m_id}", label_visibility="collapsed")
-                c5.write(v)
-            if st.form_submit_button("Publicar Resultados"):
-                for i, _ in enumerate(PARTIDOS_GRUPOS[g_adm]):
-                    m_id = f"{g_adm}_{i}"
-                    data["real_results"][m_id] = {"l": st.session_state[f"ar_l_{m_id}"], "v": st.session_state[f"ar_v_{m_id}"]}
-                save_data(data)
-    
-    st.divider()
-    cols = st.columns(3)
-    clasificados = {} # Para la fase final
-    todos_los_terceros = []
-
-    for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
-        tabla = get_group_table(g, data["real_results"])
-        with cols[idx % 3]:
-            st.write(f"**{g}**")
-            st.dataframe(tabla, hide_index=True)
-            # Guardamos clasificados (1ero y 2do)
+def resolve_full_bracket(group_tables, best_thirds, ko_data):
+    clasificados = {}
+    for g, tabla in group_tables.items():
+        if len(tabla) >= 2:
             clasificados[f"1{g[-1]}"] = tabla.iloc[0]["Equipo"]
             clasificados[f"2{g[-1]}"] = tabla.iloc[1]["Equipo"]
-            # Guardamos el tercero para el ranking
-            tercero = tabla.iloc[2].to_dict()
-            tercero["Grupo"] = g
-            todos_los_terceros.append(tercero)
 
-    # Ranking mejores terceros
-    st.subheader("🥉 Ranking de Mejores Terceros")
-    df_terceros = pd.DataFrame(todos_los_terceros).sort_values(by=["Pts", "GD", "GF"], ascending=False).reset_index(drop=True)
-    df_terceros.index += 1
-    st.table(df_terceros)
-    
-    mejores_8_terceros = df_terceros.head(8)["Equipo"].tolist()
+    def get_team(slot):
+        if slot.startswith("1") or slot.startswith("2"): return clasificados.get(slot, f"Por definir ({slot})")
+        if slot.startswith("3rd_"):
+            idx = int(slot.split("_")[1]) - 1
+            return best_thirds[idx] if idx < len(best_thirds) else f"Mejor 3ro #{idx+1}"
+        return slot
 
-# --- T3: ELIMINACIÓN AUTOMÁTICA ---
-with t3:
-    st.header("Bracket de Dieciseisavos de Final")
-    st.caption("Calculado automáticamente según los resultados reales de los grupos.")
-    
-    # Mapeo aproximado basado en Proyecciones FIFA 2026 (Simplified)
-    bracket_mapping = [
-        ("1A", "3C/E/F/H/I"), ("1E", "3A/B/C/D/F"), ("1F", "3A/B/C/D"), ("1C", "3A/B/F/G/I"),
-        ("2A", "2B"), ("2C", "2D"), ("1B", "3A/C/E/F/G"), ("1G", "3A/B/E/I/J"),
-        ("1I", "3C/D/E/G/H"), ("1K", "3H/I/J/L"), ("1L", "3G/I/J/K"), ("2E", "2F"),
-        ("2G", "2H"), ("2I", "2K"), ("1H", "2J"), ("1J", "2H")
+    # Estructura limpia y determinista del Bracket
+    slots_r32 = [
+        ("1A", "3rd_1"), ("1B", "3rd_2"), ("1C", "3rd_3"), ("1D", "3rd_4"),
+        ("1E", "3rd_5"), ("1F", "3rd_6"), ("1G", "3rd_7"), ("1H", "3rd_8"),
+        ("1I", "2J"), ("1J", "2I"), ("1K", "2L"), ("1L", "2K"),
+        ("2A", "2B"), ("2C", "2D"), ("2E", "2F"), ("2G", "2H")
     ]
-
-    r32_cols = st.columns(2)
-    terceros_lista = mejores_8_terceros.copy()
+    r32 = [{"id": i, "L_team": get_team(l), "V_team": get_team(v)} for i, (l, v) in enumerate(slots_r32)]
     
-    for i, (local_slot, visita_slot) in enumerate(bracket_mapping):
-        equipo_l = clasificados.get(local_slot, f"Ganador {local_slot}")
+    r16_slots = [(0, 12), (1, 13), (2, 14), (3, 15), (4, 8), (5, 9), (6, 10), (7, 11)]
+    r16 = [{"id": i, "L_team": get_winner(ko_data.get(f"R32_{l}"), r32[l]["L_team"], r32[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R32_{v}"), r32[v]["L_team"], r32[v]["V_team"])} for i, (l, v) in enumerate(r16_slots)]
+    
+    qf_slots = [(0, 4), (1, 5), (2, 6), (3, 7)]
+    qf = [{"id": i, "L_team": get_winner(ko_data.get(f"R16_{l}"), r16[l]["L_team"], r16[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R16_{v}"), r16[v]["L_team"], r16[v]["V_team"])} for i, (l, v) in enumerate(qf_slots)]
+    
+    sf_slots = [(0, 2), (1, 3)]
+    sf = [{"id": i, "L_team": get_winner(ko_data.get(f"QF_{l}"), qf[l]["L_team"], qf[l]["V_team"]), "V_team": get_winner(ko_data.get(f"QF_{v}"), qf[v]["L_team"], qf[v]["V_team"])} for i, (l, v) in enumerate(sf_slots)]
+    
+    final = [{"id": 0, "L_team": get_winner(ko_data.get(f"SF_0"), sf[0]["L_team"], sf[0]["V_team"]), "V_team": get_winner(ko_data.get(f"SF_1"), sf[1]["L_team"], sf[1]["V_team"])}]
+    campeon = get_winner(ko_data.get("Final_0"), final[0]["L_team"], final[0]["V_team"])
+    
+    return {"R32": r32, "R16": r16, "QF": qf, "SF": sf, "Final": final, "Campeon": campeon}
+
+# --- INTERFAZ ---
+st.set_page_config(page_title="Quiniela Pro Mundial 2026", layout="wide")
+data = load_data()
+
+st.sidebar.title("🏆 Configuración")
+user = st.sidebar.text_input("Tu Nombre de Jugador:")
+admin_mode = st.sidebar.toggle("Modo Administrador (Resultados Oficiales)")
+
+if not user:
+    st.info("👈 Por favor ingresa tu nombre en la barra lateral para sincronizar tus datos.")
+    st.stop()
+
+# Inicialización segura de esquemas en JSON
+if user not in data["users"]: data["users"][user] = {"group_predictions": {}, "ko_predictions": {}}
+if "group_predictions" not in data["users"][user]: data["users"][user]["group_predictions"] = {}
+if "ko_predictions" not in data["users"][user]: data["users"][user]["ko_predictions"] = {}
+
+t_pred, t_real, t_puntos = st.tabs(["🔮 Mi Predicción", "🌍 Realidad del Mundial", "🥇 Ranking y Puntuación"])
+
+# --- FUNCION INTERACTIVA PARA BRACKETS ---
+def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False):
+    rondas = [("R32", "Dieciseisavos de Final"), ("R16", "Octavos de Final"), ("QF", "Cuartos de Final"), ("SF", "Semifinales"), ("Final", "Gran Final")]
+    for r_key, r_name in rondas:
+        with st.expander(f"➔ {r_name}"):
+            for match in bracket_dict[r_key]:
+                m_id = f"{r_key}_{match['id']}"
+                cur = storage_path.get(m_id, {"l": 0, "v": 0, "avanza": "L"})
+                
+                # Bloquear inputs si faltan equipos definidos
+                bloqueado = "Por definir" in match["L_team"] or "Por definir" in match["V_team"] or "Mejor" in match["L_team"] or read_only
+                
+                c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 1, 1, 3, 2])
+                c1.write(f"**{match['L_team']}**")
+                l_in = c2.number_input("", 0, 15, cur["l"], key=f"{key_prefix}_l_{m_id}", disabled=bloqueado, label_visibility="collapsed")
+                c3.write("vs")
+                v_in = c4.number_input("", 0, 15, cur["v"], key=f"{key_prefix}_v_{m_id}", disabled=bloqueado, label_visibility="collapsed")
+                c5.write(f"**{match['V_team']}**")
+                
+                if l_in == v_in and not bloqueado:
+                    av = c6.selectbox("¿Quién pasa?", ["Local", "Visita"], index=0 if cur.get("avanza", "L") == "L" else 1, key=f"{key_prefix}_av_{m_id}")
+                    if not read_only: storage_path[m_id] = {"l": l_in, "v": v_in, "avanza": "L" if av == "Local" else "V"}
+                elif not bloqueado:
+                    c6.caption("Ganador directo")
+                    if not read_only: storage_path[m_id] = {"l": l_in, "v": v_in, "avanza": "L" if l_in > v_in else "V"}
+                else:
+                    c6.caption("Esperando cruces...")
+    
+    if not read_only:
+        if st.button("Guardar Llaves Eliminatorias", key=f"btn_save_ko_{key_prefix}"):
+            save_data(data)
+            st.success("¡Llave eliminatoria actualizada con éxito!")
+
+# ================= TAB 1: MI PREDICCIÓN =================
+with t_pred:
+    st.header(f"Simulación Completa de {user}")
+    st_p1, st_p2 = st.tabs(["Fase de Grupos", "Fase Eliminatoria (Bracket)"])
+    
+    with st_p1:
+        g_sel = st.selectbox("Selecciona un grupo para predecir:", list(PARTIDOS_GRUPOS.keys()), key="p_g_sel")
+        with st.form(f"form_user_{g_sel}"):
+            for i, (l, v) in enumerate(PARTIDOS_GRUPOS[g_sel]):
+                m_id = f"{g_sel}_{i}"
+                cur = data["users"][user]["group_predictions"].get(m_id, {"l": 0, "v": 0})
+                c1, c2, c3, c4, c5 = st.columns([3,1,1,1,3])
+                c1.write(l); l_in = c2.number_input("", 0, 20, cur["l"], key=f"u_l_{m_id}", label_visibility="collapsed")
+                c3.write("vs"); v_in = c4.number_input("", 0, 20, cur["v"], key=f"u_v_{m_id}", label_visibility="collapsed")
+                c5.write(v)
+            if st.form_submit_button("Guardar Resultados del Grupo"):
+                for i, _ in enumerate(PARTIDOS_GRUPOS[g_sel]):
+                    m_id = f"{g_sel}_{i}"
+                    data["users"][user]["group_predictions"][m_id] = {"l": st.session_state[f"u_l_{m_id}"], "v": st.session_state[f"u_v_{m_id}"]}
+                save_data(data)
+                st.success("Grupo simulado.")
         
-        # Asignación simple de mejores terceros por orden de aparición
-        if "3" in visita_slot:
-            if terceros_lista:
-                equipo_v = terceros_lista.pop(0)
-            else:
-                equipo_v = "Esperando Tercero..."
-        else:
-            equipo_v = clasificados.get(visita_slot, f"Segundo {visita_slot}")
+        # Mostrar cómo va quedando SU tabla
+        u_tables, u_thirds, _ = get_all_group_tables(data["users"][user]["group_predictions"])
+        st.subheader("📋 Así lucen tus grupos según tus predicciones:")
+        cx = st.columns(3)
+        for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
+            with cx[idx % 3]:
+                st.write(f"**{g}**")
+                st.dataframe(u_tables[g][["Equipo", "Pts", "GD"]], hide_index=True)
 
-        with r32_cols[i % 2]:
-            st.info(f"⚽ **M{49+i}:** {equipo_l} vs {equipo_v}")
+    with st_p2:
+        st.subheader("🎯 Tu Camino Hacia El Campeón")
+        u_tables, u_thirds, _ = get_all_group_tables(data["users"][user]["group_predictions"])
+        user_bracket = resolve_full_bracket(u_tables, u_thirds, data["users"][user]["ko_predictions"])
+        
+        st.metric(label="🏆 TU CAMPEÓN PREDICHO", value=user_bracket["Campeon"])
+        UI_fase_eliminatoria(user_bracket, data["users"][user]["ko_predictions"], "u_ko")
 
-# --- T4: RANKING QUINIELA ---
-with t4:
-    st.header("🏆 Tabla de Posiciones de la Quiniela")
-    leaderboard = []
-    for u, preds in data["users"].items():
-        puntos = 0
-        for m_id, real in data["real_results"].items():
-            if m_id in preds:
-                pl, pv = preds[m_id]["l"], preds[m_id]["v"]
-                rl, rv = real["l"], real["v"]
-                if pl == rl and pv == rv: puntos += 3
-                elif (pl > pv and rl > rv) or (pl < pv and rl < rv) or (pl == pv and rl == rv): puntos += 1
-        leaderboard.append({"Jugador": u, "Puntos": puntos})
+# ================= TAB 2: REALIDAD =================
+with t_real:
+    st.header("🌍 Estado Real del Mundial")
     
-    df_lead = pd.DataFrame(leaderboard).sort_values("Puntos", ascending=False)
-    st.table(df_lead)
+    if admin_mode:
+        st.subheader("🛠️ Panel de Carga de Datos Oficiales (Admin)")
+        adm_mode_sel = st.radio("¿Qué deseas actualizar?", ["Resultados de Grupos", "Fase Eliminatoria"])
+        
+        if adm_mode_sel == "Resultados de Grupos":
+            g_adm = st.selectbox("Grupo Real:", list(PARTIDOS_GRUPOS.keys()))
+            with st.form("f_real_grp"):
+                for i, (l, v) in enumerate(PARTIDOS_GRUPOS[g_adm]):
+                    m_id = f"{g_adm}_{i}"
+                    cur = data["real_results"]["group_results"].get(m_id, {"l": 0, "v": 0})
+                    c1, c2, c3, c4, c5 = st.columns([3,1,1,1,3])
+                    c1.write(l); l_a = c2.number_input("", 0, 20, cur["l"], key=f"r_l_{m_id}", label_visibility="collapsed")
+                    c3.write("vs"); v_a = c4.number_input("", 0, 20, cur["v"], key=f"r_v_{m_id}", label_visibility="collapsed")
+                    c5.write(v)
+                if st.form_submit_button("Publicar Resultados Reales de Grupo"):
+                    for i, _ in enumerate(PARTIDOS_GRUPOS[g_adm]):
+                        m_id = f"{g_adm}_{i}"
+                        data["real_results"]["group_results"][m_id] = {"l": st.session_state[f"r_l_{m_id}"], "v": st.session_state[f"r_v_{m_id}"]}
+                    save_data(data)
+                    st.success("Datos oficiales guardados.")
+        else:
+            r_tables, r_thirds, _ = get_all_group_tables(data["real_results"]["group_results"])
+            real_bracket = resolve_full_bracket(r_tables, r_thirds, data["real_results"]["ko_results"])
+            UI_fase_eliminatoria(real_bracket, data["real_results"]["ko_results"], "r_ko")
+
+    st.divider()
+    
+    # Vista pública de la Realidad
+    st.subheader("📊 Tablas de Posiciones Reales de la FIFA")
+    r_tables, r_thirds, df_t = get_all_group_tables(data["real_results"]["group_results"])
+    
+    cx2 = st.columns(3)
+    for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
+        with cx2[idx % 3]:
+            st.write(f"**{g}**")
+            st.dataframe(r_tables[g], hide_index=True)
+            
+    st.subheader("🥉 Tabla Oficial de Terceros")
+    st.dataframe(df_t, hide_index=True)
+    
+    st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
+    real_bracket = resolve_full_bracket(r_tables, r_thirds, data["real_results"]["ko_results"])
+    st.success(f"🏆 CAMPEÓN REAL ACTUAL: {real_bracket['Campeon']}")
+    UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True)
+
+# ================= TAB 3: POSICIONES Y REGLAS =================
+with t_puntos:
+    st.header("🏆 Tabla de Clasificación de la Quiniela")
+    
+    # --- LOGICA DE CALCULO DE PUNTOS AVANZADA ---
+    def calcular_puntos_totales(user_obj, real_obj):
+        pts = 0
+        # 1. Puntos por partidos de grupos
+        u_grp = user_obj.get("group_predictions", {})
+        r_grp = real_obj.get("group_results", {})
+        for m_id, r_res in r_grp.items():
+            if m_id in u_grp:
+                pl, pv = u_grp[m_id]["l"], u_grp[m_id]["v"]
+                rl, rv = r_res["l"], r_res["v"]
+                if pl == rl and pv == rv: pts += 3
+                elif (pl > pv and rl > rv) or (pl < pv and rl < rv) or (pl == pv and rl == rv): pts += 1
+                
+        # 2. Puntos por aciertos estructurales en el Bracket (Equipos clasificados)
+        def extraer_equipos(round_matches):
+            eqs = set()
+            for m in round_matches:
+                for k in ["L_team", "V_team"]:
+                    if not any(f in m[k] for f in ["Por definir", "Mejor", "Esperando"]): eqs.add(m[k])
+            return eqs
+
+        r_tables, r_thirds, _ = get_all_group_tables(r_grp)
+        u_tables, u_thirds, _ = get_all_group_tables(u_grp)
+        
+        rb = resolve_full_bracket(r_tables, r_thirds, real_obj.get("ko_results", {}))
+        ub = resolve_full_bracket(u_tables, u_thirds, user_obj.get("ko_predictions", {}))
+        
+        # Puntos exponenciales por clasificar equipos correctos a las rondas
+        pts += len(extraer_equipos(ub["R16"]).intersection(extraer_equipos(rb["R16"]))) * 2
+        pts += len(extraer_equipos(ub["QF"]).intersection(extraer_equipos(rb["QF"]))) * 4
+        pts += len(extraer_equipos(ub["SF"]).intersection(extraer_equipos(rb["SF"]))) * 8
+        pts += len(extraer_equipos(ub["Final"]).intersection(extraer_equipos(rb["Final"]))) * 16
+        
+        if ub["Campeon"] == rb["Campeon"] and rb["Campeon"] != "Por definir": pts += 32
+        return pts
+
+    ranking = []
+    for u_name, u_data in data["users"].items():
+        total_p = calcular_puntos_totales(u_data, data["real_results"])
+        ranking.append({"Jugador": u_name, "Puntos Totales": total_p})
+        
+    if ranking:
+        df_rank = pd.DataFrame(ranking).sort_values("Puntos Totales", ascending=False).reset_index(drop=True)
+        df_rank.index += 1
+        st.table(df_rank)
+    else:
+        st.info("No hay datos de jugadores aún.")
+        
+    st.divider()
+    
+    # --- EXPLICACIÓN DE REGLAS ---
+    st.subheader("📖 Explicación del Criterio de Puntos")
+    st.markdown("""
+    Para evaluar un torneo completo con fase eliminatoria (*Bracket Challenge*), aplicar puntos por goles en llaves avanzadas castiga al jugador si su equipo fue eliminado antes. Por ello, se utiliza el **Criterio de Progresión Exponencial**, el estándar de la FIFA:
+    
+    1. **En Fase de Grupos (Por Partido):**
+       * **3 Puntos:** Resultado Exacto (Le acertaste al marcador idéntico, ej: predijiste 2-1 y quedó 2-1).
+       * **1 Punto:** Tendencia Correcta (Acertaste al ganador o al empate, pero con otro marcador).
+       
+    2. **En Fase Eliminatoria (Por Equipo Clasificado):**
+       No importa el marcador que pongas en tus llaves, el sistema premiará **tu conocimiento a largo plazo** sumando puntos cada vez que un equipo que tú colocaste en tu árbol avance en la vida real:
+       * **2 Puntos** por cada equipo que metas correctamente en **Octavos de Final** (R16).
+       * **4 Puntos** por cada equipo que metas correctamente en **Cuartos de Final** (QF).
+       * **8 Puntos** por cada equipo que metas correctamente en **Semifinales** (SF).
+       * **16 Puntos** por cada equipo que metas correctamente en la **Gran Final**.
+       * **32 Puntos** adicionales si aciertas exactamente al **Campeón del Mundo**.
+       
+    *¡Este sistema mantiene la quiniela competitiva e emocionante hasta el último minuto del Mundial!*
+    """)
