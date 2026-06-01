@@ -36,7 +36,7 @@ PARTIDOS_GRUPOS = {
     "Grupo L": [("Inglaterra", "Croacia"), ("Ghana", "Panamá"), ("Panamá", "Croacia"), ("Inglaterra", "Ghana"), ("Panamá", "Inglaterra"), ("Croacia", "Ghana")]
 }
 
-# --- PERSISTENCIA Y ESQUEMA ---
+# --- PERSISTENCIA ---
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f: return json.load(f)
@@ -45,7 +45,7 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, "w") as f: json.dump(data, f, indent=4)
 
-# --- PROCESAMIENTO DE MATRICES ---
+# --- MATRICES Y TABLAS ---
 def get_all_group_tables(resultados_dict):
     tables = {}
     thirds = []
@@ -97,7 +97,6 @@ def resolve_full_bracket(group_tables, best_thirds, ko_data):
             return best_thirds[idx] if idx < len(best_thirds) else f"Mejor 3ro #{idx+1}"
         return slot
 
-    # Estructura limpia y determinista del Bracket
     slots_r32 = [
         ("1A", "3rd_1"), ("1B", "3rd_2"), ("1C", "3rd_3"), ("1D", "3rd_4"),
         ("1E", "3rd_5"), ("1F", "3rd_6"), ("1G", "3rd_7"), ("1H", "3rd_8"),
@@ -105,16 +104,12 @@ def resolve_full_bracket(group_tables, best_thirds, ko_data):
         ("2A", "2B"), ("2C", "2D"), ("2E", "2F"), ("2G", "2H")
     ]
     r32 = [{"id": i, "L_team": get_team(l), "V_team": get_team(v)} for i, (l, v) in enumerate(slots_r32)]
-    
     r16_slots = [(0, 12), (1, 13), (2, 14), (3, 15), (4, 8), (5, 9), (6, 10), (7, 11)]
     r16 = [{"id": i, "L_team": get_winner(ko_data.get(f"R32_{l}"), r32[l]["L_team"], r32[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R32_{v}"), r32[v]["L_team"], r32[v]["V_team"])} for i, (l, v) in enumerate(r16_slots)]
-    
     qf_slots = [(0, 4), (1, 5), (2, 6), (3, 7)]
     qf = [{"id": i, "L_team": get_winner(ko_data.get(f"R16_{l}"), r16[l]["L_team"], r16[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R16_{v}"), r16[v]["L_team"], r16[v]["V_team"])} for i, (l, v) in enumerate(qf_slots)]
-    
     sf_slots = [(0, 2), (1, 3)]
     sf = [{"id": i, "L_team": get_winner(ko_data.get(f"QF_{l}"), qf[l]["L_team"], qf[l]["V_team"]), "V_team": get_winner(ko_data.get(f"QF_{v}"), qf[v]["L_team"], qf[v]["V_team"])} for i, (l, v) in enumerate(sf_slots)]
-    
     final = [{"id": 0, "L_team": get_winner(ko_data.get(f"SF_0"), sf[0]["L_team"], sf[0]["V_team"]), "V_team": get_winner(ko_data.get(f"SF_1"), sf[1]["L_team"], sf[1]["V_team"])}]
     campeon = get_winner(ko_data.get("Final_0"), final[0]["L_team"], final[0]["V_team"])
     
@@ -124,6 +119,11 @@ def resolve_full_bracket(group_tables, best_thirds, ko_data):
 st.set_page_config(page_title="Quiniela Pro Mundial 2026", layout="wide")
 data = load_data()
 
+# Mostrar mensajes de éxito tras un redibujo de la página (rerun)
+if "msg_exito" in st.session_state:
+    st.toast(st.session_state["msg_exito"], icon="✅")
+    del st.session_state["msg_exito"]
+
 st.sidebar.title("🏆 Configuración")
 user = st.sidebar.text_input("Tu Nombre de Jugador:")
 admin_mode = st.sidebar.toggle("Modo Administrador (Resultados Oficiales)")
@@ -132,53 +132,78 @@ if not user:
     st.info("👈 Por favor ingresa tu nombre en la barra lateral para sincronizar tus datos.")
     st.stop()
 
-# Inicialización segura de esquemas en JSON
 if user not in data["users"]: data["users"][user] = {"group_predictions": {}, "ko_predictions": {}}
 if "group_predictions" not in data["users"][user]: data["users"][user]["group_predictions"] = {}
 if "ko_predictions" not in data["users"][user]: data["users"][user]["ko_predictions"] = {}
 
 t_pred, t_real, t_puntos = st.tabs(["🔮 Mi Predicción", "🌍 Realidad del Mundial", "🥇 Ranking y Puntuación"])
 
-# --- FUNCION INTERACTIVA PARA BRACKETS ---
+# ================= COMPONENTE FASE ELIMINATORIA (ACTUALIZADO POR FASES) =================
 def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False):
     rondas = [("R32", "Dieciseisavos de Final"), ("R16", "Octavos de Final"), ("QF", "Cuartos de Final"), ("SF", "Semifinales"), ("Final", "Gran Final")]
-    for r_key, r_name in rondas:
-        with st.expander(f"➔ {r_name}"):
-            for match in bracket_dict[r_key]:
-                m_id = f"{r_key}_{match['id']}"
-                cur = storage_path.get(m_id, {"l": 0, "v": 0, "avanza": "L"})
-                
-                # Bloquear inputs si faltan equipos definidos
-                bloqueado = "Por definir" in match["L_team"] or "Por definir" in match["V_team"] or "Mejor" in match["L_team"] or read_only
-                
-                c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 1, 1, 3, 2])
-                c1.write(f"**{match['L_team']}**")
-                l_in = c2.number_input("", 0, 15, cur["l"], key=f"{key_prefix}_l_{m_id}", disabled=bloqueado, label_visibility="collapsed")
-                c3.write("vs")
-                v_in = c4.number_input("", 0, 15, cur["v"], key=f"{key_prefix}_v_{m_id}", disabled=bloqueado, label_visibility="collapsed")
-                c5.write(f"**{match['V_team']}**")
-                
-                if l_in == v_in and not bloqueado:
-                    av = c6.selectbox("¿Quién pasa?", ["Local", "Visita"], index=0 if cur.get("avanza", "L") == "L" else 1, key=f"{key_prefix}_av_{m_id}")
-                    if not read_only: storage_path[m_id] = {"l": l_in, "v": v_in, "avanza": "L" if av == "Local" else "V"}
-                elif not bloqueado:
-                    c6.caption("Ganador directo")
-                    if not read_only: storage_path[m_id] = {"l": l_in, "v": v_in, "avanza": "L" if l_in > v_in else "V"}
-                else:
-                    c6.caption("Esperando cruces...")
     
     if not read_only:
-        if st.button("Guardar Llaves Eliminatorias", key=f"btn_save_ko_{key_prefix}"):
-            save_data(data)
-            st.success("¡Llave eliminatoria actualizada con éxito!")
+        st.info("📌 **Instrucción:** Anota los goles. Si marcas un empate, usa el menú 'Desempate' para elegir al ganador por penales. **Guarda cada fase para que los ganadores pasen a la siguiente.**")
+    
+    for r_key, r_name in rondas:
+        with st.expander(f"➔ {r_name}", expanded=True):
+            if read_only:
+                for match in bracket_dict[r_key]:
+                    m_id = f"{r_key}_{match['id']}"
+                    cur = storage_path.get(m_id, {"l": 0, "v": 0, "avanza": "L"})
+                    c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 1, 1, 3, 2])
+                    c1.write(f"**{match['L_team']}**")
+                    c2.write(cur["l"])
+                    c3.write("vs")
+                    c4.write(cur["v"])
+                    c5.write(f"**{match['V_team']}**")
+                    if cur["l"] == cur["v"] and ("Por definir" not in match["L_team"]):
+                        ganador = match['L_team'] if cur.get('avanza', 'L') == 'L' else match['V_team']
+                        c6.caption(f"Penales: {ganador}")
+            else:
+                with st.form(f"form_{key_prefix}_{r_key}"):
+                    for match in bracket_dict[r_key]:
+                        m_id = f"{r_key}_{match['id']}"
+                        cur = storage_path.get(m_id, {"l": 0, "v": 0, "avanza": "L"})
+                        bloqueado = "Por definir" in match["L_team"] or "Por definir" in match["V_team"] or "Mejor" in match["L_team"]
+                        
+                        c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 1, 1, 3, 2])
+                        c1.write(f"**{match['L_team']}**")
+                        l_in = c2.number_input("", 0, 15, cur["l"], key=f"{key_prefix}_l_{m_id}", disabled=bloqueado, label_visibility="collapsed")
+                        c3.write("vs")
+                        v_in = c4.number_input("", 0, 15, cur["v"], key=f"{key_prefix}_v_{m_id}", disabled=bloqueado, label_visibility="collapsed")
+                        c5.write(f"**{match['V_team']}**")
+                        
+                        av_idx = 0 if cur.get("avanza", "L") == "L" else 1
+                        c6.selectbox("Desempate:", ["Local", "Visita"], index=av_idx, key=f"{key_prefix}_av_{m_id}", disabled=bloqueado, label_visibility="collapsed")
+
+                    # BOTÓN INDIVIDUAL POR FASE
+                    if st.form_submit_button(f"Guardar {r_name} y Avanzar"):
+                        for match in bracket_dict[r_key]:
+                            m_id = f"{r_key}_{match['id']}"
+                            blk = "Por definir" in match["L_team"] or "Por definir" in match["V_team"] or "Mejor" in match["L_team"]
+                            if not blk:
+                                l_val = st.session_state[f"{key_prefix}_l_{m_id}"]
+                                v_val = st.session_state[f"{key_prefix}_v_{m_id}"]
+                                av_str = st.session_state[f"{key_prefix}_av_{m_id}"]
+                                
+                                if l_val > v_val: avanza = "L"
+                                elif v_val > l_val: avanza = "V"
+                                else: avanza = "L" if av_str == "Local" else "V"
+                                
+                                storage_path[m_id] = {"l": l_val, "v": v_val, "avanza": avanza}
+                        
+                        save_data(data)
+                        st.session_state["msg_exito"] = f"¡{r_name} actualizados! Se han generado los nuevos cruces."
+                        st.rerun()
 
 # ================= TAB 1: MI PREDICCIÓN =================
 with t_pred:
-    st.header(f"Simulación Completa de {user}")
-    st_p1, st_p2 = st.tabs(["Fase de Grupos", "Fase Eliminatoria (Bracket)"])
+    st.header(f"Simulación de {user}")
+    st_p1, st_p2 = st.tabs(["1. Fase de Grupos", "2. Fase Eliminatoria"])
     
     with st_p1:
-        g_sel = st.selectbox("Selecciona un grupo para predecir:", list(PARTIDOS_GRUPOS.keys()), key="p_g_sel")
+        g_sel = st.selectbox("Selecciona un grupo:", list(PARTIDOS_GRUPOS.keys()), key="p_g_sel")
         with st.form(f"form_user_{g_sel}"):
             for i, (l, v) in enumerate(PARTIDOS_GRUPOS[g_sel]):
                 m_id = f"{g_sel}_{i}"
@@ -192,11 +217,10 @@ with t_pred:
                     m_id = f"{g_sel}_{i}"
                     data["users"][user]["group_predictions"][m_id] = {"l": st.session_state[f"u_l_{m_id}"], "v": st.session_state[f"u_v_{m_id}"]}
                 save_data(data)
-                st.success("Grupo simulado.")
+                st.success("Grupo guardado.")
         
-        # Mostrar cómo va quedando SU tabla
         u_tables, u_thirds, _ = get_all_group_tables(data["users"][user]["group_predictions"])
-        st.subheader("📋 Así lucen tus grupos según tus predicciones:")
+        st.subheader("📋 Así lucen tus grupos:")
         cx = st.columns(3)
         for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
             with cx[idx % 3]:
@@ -204,11 +228,12 @@ with t_pred:
                 st.dataframe(u_tables[g][["Equipo", "Pts", "GD"]], hide_index=True)
 
     with st_p2:
-        st.subheader("🎯 Tu Camino Hacia El Campeón")
+        st.subheader("🎯 Camino Hacia El Campeón")
         u_tables, u_thirds, _ = get_all_group_tables(data["users"][user]["group_predictions"])
         user_bracket = resolve_full_bracket(u_tables, u_thirds, data["users"][user]["ko_predictions"])
         
-        st.metric(label="🏆 TU CAMPEÓN PREDICHO", value=user_bracket["Campeon"])
+        if user_bracket["Campeon"] != "Por definir":
+            st.success(f"🏆 TU CAMPEÓN PREDICHO: {user_bracket['Campeon']}")
         UI_fase_eliminatoria(user_bracket, data["users"][user]["ko_predictions"], "u_ko")
 
 # ================= TAB 2: REALIDAD =================
@@ -216,8 +241,8 @@ with t_real:
     st.header("🌍 Estado Real del Mundial")
     
     if admin_mode:
-        st.subheader("🛠️ Panel de Carga de Datos Oficiales (Admin)")
-        adm_mode_sel = st.radio("¿Qué deseas actualizar?", ["Resultados de Grupos", "Fase Eliminatoria"])
+        st.subheader("🛠️ Panel de Carga (Administrador)")
+        adm_mode_sel = st.radio("Sección a actualizar:", ["Resultados de Grupos", "Fase Eliminatoria"])
         
         if adm_mode_sel == "Resultados de Grupos":
             g_adm = st.selectbox("Grupo Real:", list(PARTIDOS_GRUPOS.keys()))
@@ -242,32 +267,21 @@ with t_real:
 
     st.divider()
     
-    # Vista pública de la Realidad
-    st.subheader("📊 Tablas de Posiciones Reales de la FIFA")
+    st.subheader("📊 Tablas Reales y Eliminatorias")
     r_tables, r_thirds, df_t = get_all_group_tables(data["real_results"]["group_results"])
-    
-    cx2 = st.columns(3)
-    for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
-        with cx2[idx % 3]:
-            st.write(f"**{g}**")
-            st.dataframe(r_tables[g], hide_index=True)
-            
-    st.subheader("🥉 Tabla Oficial de Terceros")
-    st.dataframe(df_t, hide_index=True)
-    
-    st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
     real_bracket = resolve_full_bracket(r_tables, r_thirds, data["real_results"]["ko_results"])
-    st.success(f"🏆 CAMPEÓN REAL ACTUAL: {real_bracket['Campeon']}")
-    UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True)
-
-# ================= TAB 3: POSICIONES Y REGLAS =================
-with t_puntos:
-    st.header("🏆 Tabla de Clasificación de la Quiniela")
     
-    # --- LOGICA DE CALCULO DE PUNTOS AVANZADA ---
+    if real_bracket["Campeon"] != "Por definir":
+        st.success(f"🏆 CAMPEÓN REAL: {real_bracket['Campeon']}")
+        
+    UI_fase_eliminatoria(real_bracket, data["real_results"]["ko_results"], "view_real_ko", read_only=True)
+
+# ================= TAB 3: POSICIONES =================
+with t_puntos:
+    st.header("🏆 Tabla de Clasificación")
+    
     def calcular_puntos_totales(user_obj, real_obj):
         pts = 0
-        # 1. Puntos por partidos de grupos
         u_grp = user_obj.get("group_predictions", {})
         r_grp = real_obj.get("group_results", {})
         for m_id, r_res in r_grp.items():
@@ -277,7 +291,6 @@ with t_puntos:
                 if pl == rl and pv == rv: pts += 3
                 elif (pl > pv and rl > rv) or (pl < pv and rl < rv) or (pl == pv and rl == rv): pts += 1
                 
-        # 2. Puntos por aciertos estructurales en el Bracket (Equipos clasificados)
         def extraer_equipos(round_matches):
             eqs = set()
             for m in round_matches:
@@ -287,49 +300,23 @@ with t_puntos:
 
         r_tables, r_thirds, _ = get_all_group_tables(r_grp)
         u_tables, u_thirds, _ = get_all_group_tables(u_grp)
-        
         rb = resolve_full_bracket(r_tables, r_thirds, real_obj.get("ko_results", {}))
         ub = resolve_full_bracket(u_tables, u_thirds, user_obj.get("ko_predictions", {}))
         
-        # Puntos exponenciales por clasificar equipos correctos a las rondas
         pts += len(extraer_equipos(ub["R16"]).intersection(extraer_equipos(rb["R16"]))) * 2
         pts += len(extraer_equipos(ub["QF"]).intersection(extraer_equipos(rb["QF"]))) * 4
         pts += len(extraer_equipos(ub["SF"]).intersection(extraer_equipos(rb["SF"]))) * 8
         pts += len(extraer_equipos(ub["Final"]).intersection(extraer_equipos(rb["Final"]))) * 16
-        
         if ub["Campeon"] == rb["Campeon"] and rb["Campeon"] != "Por definir": pts += 32
         return pts
 
     ranking = []
     for u_name, u_data in data["users"].items():
-        total_p = calcular_puntos_totales(u_data, data["real_results"])
-        ranking.append({"Jugador": u_name, "Puntos Totales": total_p})
+        ranking.append({"Jugador": u_name, "Puntos Totales": calcular_puntos_totales(u_data, data["real_results"])})
         
     if ranking:
         df_rank = pd.DataFrame(ranking).sort_values("Puntos Totales", ascending=False).reset_index(drop=True)
         df_rank.index += 1
         st.table(df_rank)
     else:
-        st.info("No hay datos de jugadores aún.")
-        
-    st.divider()
-    
-    # --- EXPLICACIÓN DE REGLAS ---
-    st.subheader("📖 Explicación del Criterio de Puntos")
-    st.markdown("""
-    Para evaluar un torneo completo con fase eliminatoria (*Bracket Challenge*), aplicar puntos por goles en llaves avanzadas castiga al jugador si su equipo fue eliminado antes. Por ello, se utiliza el **Criterio de Progresión Exponencial**, el estándar de la FIFA:
-    
-    1. **En Fase de Grupos (Por Partido):**
-       * **3 Puntos:** Resultado Exacto (Le acertaste al marcador idéntico, ej: predijiste 2-1 y quedó 2-1).
-       * **1 Punto:** Tendencia Correcta (Acertaste al ganador o al empate, pero con otro marcador).
-       
-    2. **En Fase Eliminatoria (Por Equipo Clasificado):**
-       No importa el marcador que pongas en tus llaves, el sistema premiará **tu conocimiento a largo plazo** sumando puntos cada vez que un equipo que tú colocaste en tu árbol avance en la vida real:
-       * **2 Puntos** por cada equipo que metas correctamente en **Octavos de Final** (R16).
-       * **4 Puntos** por cada equipo que metas correctamente en **Cuartos de Final** (QF).
-       * **8 Puntos** por cada equipo que metas correctamente en **Semifinales** (SF).
-       * **16 Puntos** por cada equipo que metas correctamente en la **Gran Final**.
-       * **32 Puntos** adicionales si aciertas exactamente al **Campeón del Mundo**.
-       
-    *¡Este sistema mantiene la quiniela competitiva e emocionante hasta el último minuto del Mundial!*
-    """)
+        st.info("Aún no hay puntuaciones calculadas.")
