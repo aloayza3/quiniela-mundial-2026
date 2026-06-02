@@ -282,7 +282,7 @@ with t_real:
             st.dataframe(r_tables[g], hide_index=True)
             
     st.subheader("🥉 Tabla Oficial de Terceros")
-    st.dataframe(df_t, hide_index=True)
+    st.dataframe(df_r_thirds, hide_index=True)
     
     st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
     real_bracket = resolve_full_bracket(r_tables, df_r_thirds, data["real_results"]["ko_results"])
