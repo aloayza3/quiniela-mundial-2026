@@ -221,8 +221,15 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
                 c5.write(f"**{match['V_team']}**")
                 
                 if l_in == v_in and not bloqueado:
-                    av = c6.selectbox("¿Quién pasa?", ["Local", "Visita"], index=0 if cur.get("avanza", "L") == "L" else 1, key=f"{key_prefix}_av_{m_id}")
-                    if not read_only: storage_path[m_id] = {"l": l_in, "v": v_in, "avanza": "L" if av == "Local" else "V"}
+                    # Mostrar nombres de equipos reales en vez de "Local" o "Visita"
+                    team_options = [match["L_team"], match["V_team"]]
+                    current_avanza = cur.get("avanza", "L")
+                    idx = 0 if current_avanza == "L" else 1
+                    
+                    av = c6.selectbox("¿Quién pasa (Penales)?", team_options, index=idx, key=f"{key_prefix}_av_{m_id}")
+                    if not read_only: 
+                        # Lo seguimos guardando internamente como "L" o "V"
+                        storage_path[m_id] = {"l": l_in, "v": v_in, "avanza": "L" if av == match["L_team"] else "V"}
                 elif not bloqueado:
                     c6.caption("Ganador directo")
                     if not read_only: storage_path[m_id] = {"l": l_in, "v": v_in, "avanza": "L" if l_in > v_in else "V"}
