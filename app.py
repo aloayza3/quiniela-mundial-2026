@@ -39,8 +39,16 @@ PARTIDOS_GRUPOS = {
 # --- PERSISTENCIA Y ESQUEMA ---
 def load_data():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f: return json.load(f)
-    return {"users": {}, "real_results": {"group_results": {}, "ko_results": {}}}
+        with open(DATA_FILE, "r") as f:
+            data = json.load(f)
+    else:
+        data = {"users": {}, "real_results": {"group_results": {}, "ko_results": {}}}
+
+    data.setdefault("users", {})
+    data.setdefault("real_results", {})
+    data["real_results"].setdefault("group_results", {})
+    data["real_results"].setdefault("ko_results", {})
+    return data
 
 def save_data(data):
     with open(DATA_FILE, "w") as f: json.dump(data, f, indent=4)
@@ -193,7 +201,7 @@ if user not in data["users"]: data["users"][user] = {"group_predictions": {}, "k
 if "group_predictions" not in data["users"][user]: data["users"][user]["group_predictions"] = {}
 if "ko_predictions" not in data["users"][user]: data["users"][user]["ko_predictions"] = {}
 
-t_pred, t_real, t_puntos = st.tabs(["🔮 Mi Predicción", "🌍 Realidad del Mundial", "🥇 Ranking y Puntuación"])
+t_pred, t_otros, t_real, t_puntos = st.tabs(["🔮 Mi Predicción", "👥 Otros Jugadores", "🌍 Realidad del Mundial", "🥇 Ranking y Puntuación"])
 
 # --- FUNCION INTERACTIVA PARA BRACKETS ---
 def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False):
@@ -209,6 +217,7 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
         with st.expander(f"➔ {r_name}", expanded=True):
             for match in bracket_dict[r_key]:
                 m_id = f"{r_key}_{match['id']}"
+                has_pick = m_id in storage_path
                 cur = storage_path.get(m_id, {"l": 0, "v": 0, "avanza": "L"})
                 
                 bloqueado = "Por definir" in match["L_team"] or "Por definir" in match["V_team"] or "Mejor" in match["L_team"] or read_only
@@ -220,7 +229,17 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
                 v_in = c4.number_input("", 0, 15, cur["v"], key=f"{key_prefix}_v_{m_id}", disabled=bloqueado, label_visibility="collapsed")
                 c5.write(f"**{match['V_team']}**")
                 
-                if l_in == v_in and not bloqueado:
+                if read_only:
+                    if not has_pick:
+                        c6.caption("Sin predicción")
+                    elif "Por definir" in match["L_team"] or "Por definir" in match["V_team"] or "Mejor" in match["L_team"]:
+                        c6.caption("Esperando cruces...")
+                    elif l_in == v_in:
+                        ganador_penales = match["L_team"] if cur.get("avanza", "L") == "L" else match["V_team"]
+                        c6.caption(f"Pasa: {ganador_penales}")
+                    else:
+                        c6.caption("Ganador directo")
+                elif l_in == v_in and not bloqueado:
                     # Mostrar nombres de equipos reales en vez de "Local" o "Visita"
                     team_options = [match["L_team"], match["V_team"]]
                     current_avanza = cur.get("avanza", "L")
@@ -241,6 +260,43 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
                 if st.button(f"Actualizar y Avanzar a la siguiente ronda ({r_name})", key=f"btn_save_ko_{key_prefix}_{r_key}"):
                     save_data(data)
                     st.rerun() 
+
+def UI_prediccion_jugador(player_name, player_data, key_prefix):
+    st.header(f"Predicción de {player_name}")
+    st_p1, st_p2 = st.tabs(["Fase de Grupos", "Fase Eliminatoria (Bracket)"])
+    
+    group_predictions = player_data.get("group_predictions", {})
+    ko_predictions = player_data.get("ko_predictions", {})
+    
+    with st_p1:
+        g_sel = st.selectbox("Selecciona un grupo:", list(PARTIDOS_GRUPOS.keys()), key=f"{key_prefix}_g_sel")
+        for i, (l, v) in enumerate(PARTIDOS_GRUPOS[g_sel]):
+            m_id = f"{g_sel}_{i}"
+            cur = group_predictions.get(m_id, {"l": 0, "v": 0})
+            c1, c2, c3, c4, c5 = st.columns([3,1,1,1,3])
+            c1.write(l)
+            c2.number_input("", 0, 20, cur["l"], key=f"{key_prefix}_l_{m_id}", disabled=True, label_visibility="collapsed")
+            c3.write("vs")
+            c4.number_input("", 0, 20, cur["v"], key=f"{key_prefix}_v_{m_id}", disabled=True, label_visibility="collapsed")
+            c5.write(v)
+
+        player_tables, _, player_thirds = get_all_group_tables(group_predictions)
+        st.subheader("📋 Tablas según esta predicción:")
+        cx = st.columns(3)
+        for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
+            with cx[idx % 3]:
+                st.write(f"**{g}**")
+                st.dataframe(player_tables[g][["Equipo", "Pts", "GD"]], hide_index=True)
+                
+        st.divider()
+        st.subheader("🥉 Mejores Terceros")
+        st.dataframe(player_thirds[["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]], hide_index=True)
+
+    with st_p2:
+        player_tables, _, player_thirds = get_all_group_tables(group_predictions)
+        player_bracket = resolve_full_bracket(player_tables, player_thirds, ko_predictions)
+        st.metric(label="🏆 CAMPEÓN PREDICHO", value=player_bracket["Campeon"])
+        UI_fase_eliminatoria(player_bracket, ko_predictions, f"{key_prefix}_ko", read_only=True)
 
 # ================= TAB 1: MI PREDICCIÓN =================
 with t_pred:
@@ -284,7 +340,18 @@ with t_pred:
         st.metric(label="🏆 TU CAMPEÓN PREDICHO", value=user_bracket["Campeon"])
         UI_fase_eliminatoria(user_bracket, data["users"][user]["ko_predictions"], "u_ko")
 
-# ================= TAB 2: REALIDAD =================
+# ================= TAB 2: OTROS JUGADORES =================
+with t_otros:
+    player_options = [u_name for u_name in data["users"].keys() if u_name and u_name != user]
+    
+    if not player_options:
+        st.info("Todavía no hay otros jugadores con predicciones guardadas.")
+    else:
+        selected_player = st.selectbox("Elige un jugador para ver su predicción:", sorted(player_options))
+        selected_data = data["users"].get(selected_player, {})
+        UI_prediccion_jugador(selected_player, selected_data, f"otros_{selected_player}")
+
+# ================= TAB 3: REALIDAD =================
 with t_real:
     st.header("🌍 Estado Real del Mundial")
     
@@ -332,7 +399,7 @@ with t_real:
     st.success(f"🏆 CAMPEÓN REAL ACTUAL: {real_bracket['Campeon']}")
     UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True)
 
-# ================= TAB 3: POSICIONES Y REGLAS =================
+# ================= TAB 4: POSICIONES Y REGLAS =================
 with t_puntos:
     st.header("🏆 Tabla de Clasificación de la Quiniela")
     
