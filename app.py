@@ -83,28 +83,60 @@ def get_winner(match_data, team_l, team_v):
     elif l_score < v_score: return team_v
     return team_l if match_data.get("avanza", "L") == "L" else team_v
 
-def resolve_full_bracket(group_tables, best_thirds, ko_data):
+def resolve_full_bracket(group_tables, df_thirds, ko_data):
     clasificados = {}
     for g, tabla in group_tables.items():
         if len(tabla) >= 2:
             clasificados[f"1{g[-1]}"] = tabla.iloc[0]["Equipo"]
             clasificados[f"2{g[-1]}"] = tabla.iloc[1]["Equipo"]
 
+    # Extraer la lista de los 8 mejores terceros junto con su grupo de origen
+    mejores_8_terceros = df_thirds.head(8).to_dict('records') if not df_thirds.empty else []
+
+    # --- ALGORITMO DINÁMICO DE ASIGNACIÓN (LÓGICA FIFA) ---
+    asignaciones_terceros = {}
+    terceros_disp = mejores_8_terceros.copy()
+    
+    # Estos son los 8 líderes que, por llave, van contra un tercero
+    slots_vs_terceros = ["1A", "1B", "1C", "1D", "1E", "1F", "1G", "1H"]
+    
+    for slot in slots_vs_terceros:
+        if not terceros_disp: break
+        grupo_lider = slot[-1] # Letra del grupo del líder (Ej: 'A')
+        
+        asignado = False
+        # Buscar el mejor tercero disponible que NO sea del mismo grupo
+        for t in terceros_disp:
+            if t["Grupo"][-1] != grupo_lider:
+                asignaciones_terceros[slot] = t["Equipo"]
+                terceros_disp.remove(t)
+                asignado = True
+                break
+        
+        # Fallback de seguridad por si quedan arrinconados al final
+        if not asignado and terceros_disp:
+            t = terceros_disp.pop(0)
+            asignaciones_terceros[slot] = t["Equipo"]
+
+    # Función interna para nombrar las llaves
     def get_team(slot):
-        if slot.startswith("1") or slot.startswith("2"): return clasificados.get(slot, f"Por definir ({slot})")
-        if slot.startswith("3rd_"):
-            idx = int(slot.split("_")[1]) - 1
-            return best_thirds[idx] if idx < len(best_thirds) else f"Mejor 3ro #{idx+1}"
+        if slot.startswith("1") or slot.startswith("2"): 
+            return clasificados.get(slot, f"Por definir ({slot})")
+        if slot.startswith("3rd_from_"):
+            lider_slot = slot.split("_from_")[1]
+            return asignaciones_terceros.get(lider_slot, "Esperando Tercero...")
         return slot
 
+    # Llaves oficiales de R32 adaptadas a la selección dinámica
     slots_r32 = [
-        ("1A", "3rd_1"), ("1B", "3rd_2"), ("1C", "3rd_3"), ("1D", "3rd_4"),
-        ("1E", "3rd_5"), ("1F", "3rd_6"), ("1G", "3rd_7"), ("1H", "3rd_8"),
+        ("1A", "3rd_from_1A"), ("1B", "3rd_from_1B"), ("1C", "3rd_from_1C"), ("1D", "3rd_from_1D"),
+        ("1E", "3rd_from_1E"), ("1F", "3rd_from_1F"), ("1G", "3rd_from_1G"), ("1H", "3rd_from_1H"),
         ("1I", "2J"), ("1J", "2I"), ("1K", "2L"), ("1L", "2K"),
         ("2A", "2B"), ("2C", "2D"), ("2E", "2F"), ("2G", "2H")
     ]
     r32 = [{"id": i, "L_team": get_team(l), "V_team": get_team(v)} for i, (l, v) in enumerate(slots_r32)]
     
+    # --- RESTO DEL BRACKET (No cambia) ---
     r16_slots = [(0, 12), (1, 13), (2, 14), (3, 15), (4, 8), (5, 9), (6, 10), (7, 11)]
     r16 = [{"id": i, "L_team": get_winner(ko_data.get(f"R32_{l}"), r32[l]["L_team"], r32[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R32_{v}"), r32[v]["L_team"], r32[v]["V_team"])} for i, (l, v) in enumerate(r16_slots)]
     
@@ -118,7 +150,7 @@ def resolve_full_bracket(group_tables, best_thirds, ko_data):
     campeon = get_winner(ko_data.get("Final_0"), final[0]["L_team"], final[0]["V_team"])
     
     return {"R32": r32, "R16": r16, "QF": qf, "SF": sf, "Final": final, "Campeon": campeon}
-
+    
 # --- INTERFAZ ---
 st.set_page_config(page_title="Quiniela Pro Mundial 2026", layout="wide")
 data = load_data()
@@ -203,8 +235,8 @@ with t_pred:
 
     with st_p2:
         st.subheader("🎯 Tu Camino Hacia El Campeón")
-        u_tables, u_thirds, _ = get_all_group_tables(data["users"][user]["group_predictions"])
-        user_bracket = resolve_full_bracket(u_tables, u_thirds, data["users"][user]["ko_predictions"])
+        u_tables, _, df_u_thirds = get_all_group_tables(data["users"][user]["group_predictions"])
+        user_bracket = resolve_full_bracket(u_tables, df_u_thirds, data["users"][user]["ko_predictions"])
         
         st.metric(label="🏆 TU CAMPEÓN PREDICHO", value=user_bracket["Campeon"])
         UI_fase_eliminatoria(user_bracket, data["users"][user]["ko_predictions"], "u_ko")
@@ -234,8 +266,8 @@ with t_real:
                     save_data(data)
                     st.success("Datos oficiales guardados.")
         else:
-            r_tables, r_thirds, _ = get_all_group_tables(data["real_results"]["group_results"])
-            real_bracket = resolve_full_bracket(r_tables, r_thirds, data["real_results"]["ko_results"])
+            r_tables, _, df_r_thirds = get_all_group_tables(data["real_results"]["group_results"])
+            real_bracket = resolve_full_bracket(r_tables, df_r_thirds, data["real_results"]["ko_results"])
             UI_fase_eliminatoria(real_bracket, data["real_results"]["ko_results"], "r_ko")
 
     st.divider()
@@ -279,11 +311,11 @@ with t_puntos:
                     if not any(f in m[k] for f in ["Por definir", "Mejor", "Esperando"]): eqs.add(m[k])
             return eqs
 
-        r_tables, r_thirds, _ = get_all_group_tables(r_grp)
-        u_tables, u_thirds, _ = get_all_group_tables(u_grp)
+        r_tables, _, df_r_thirds = get_all_group_tables(r_grp)
+        u_tables, _, df_u_thirds = get_all_group_tables(u_grp)
         
-        rb = resolve_full_bracket(r_tables, r_thirds, real_obj.get("ko_results", {}))
-        ub = resolve_full_bracket(u_tables, u_thirds, user_obj.get("ko_predictions", {}))
+        rb = resolve_full_bracket(r_tables, df_r_thirds, real_obj.get("ko_results", {}))
+        ub = resolve_full_bracket(u_tables, df_u_thirds, user_obj.get("ko_predictions", {}))
         
         pts += len(extraer_equipos(ub["R16"]).intersection(extraer_equipos(rb["R16"]))) * 2
         pts += len(extraer_equipos(ub["QF"]).intersection(extraer_equipos(rb["QF"]))) * 4
