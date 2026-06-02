@@ -273,7 +273,7 @@ with t_real:
     st.divider()
     
     st.subheader("📊 Tablas de Posiciones Reales de la FIFA")
-    r_tables, r_thirds, df_t = get_all_group_tables(data["real_results"]["group_results"])
+    r_tables, _, df_r_thirds = get_all_group_tables(data["real_results"]["group_results"])
     
     cx2 = st.columns(3)
     for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
@@ -285,7 +285,7 @@ with t_real:
     st.dataframe(df_t, hide_index=True)
     
     st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
-    real_bracket = resolve_full_bracket(r_tables, r_thirds, data["real_results"]["ko_results"])
+    real_bracket = resolve_full_bracket(r_tables, df_r_thirds, data["real_results"]["ko_results"])
     st.success(f"🏆 CAMPEÓN REAL ACTUAL: {real_bracket['Campeon']}")
     UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True)
 
