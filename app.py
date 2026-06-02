@@ -73,6 +73,11 @@ def get_all_group_tables(resultados_dict):
             thirds.append(tercero)
             
     df_thirds = pd.DataFrame(thirds).sort_values(by=["Pts", "GD", "GF"], ascending=False).reset_index(drop=True)
+    
+    # Agregamos una columna visual para saber quién pasa
+    if not df_thirds.empty:
+        df_thirds["Avanza"] = ["✅ Sí" if i < 8 else "❌ No" for i in range(len(df_thirds))]
+        
     best_thirds_list = df_thirds.head(8)["Equipo"].tolist() if not df_thirds.empty else []
     return tables, best_thirds_list, df_thirds
 
@@ -90,22 +95,20 @@ def resolve_full_bracket(group_tables, df_thirds, ko_data):
             clasificados[f"1{g[-1]}"] = tabla.iloc[0]["Equipo"]
             clasificados[f"2{g[-1]}"] = tabla.iloc[1]["Equipo"]
 
-    # Extraer la lista de los 8 mejores terceros junto con su grupo de origen
+    # Extraer la lista de los 8 mejores terceros
     mejores_8_terceros = df_thirds.head(8).to_dict('records') if not df_thirds.empty else []
 
-    # --- ALGORITMO DINÁMICO DE ASIGNACIÓN (LÓGICA FIFA) ---
+    # --- ALGORITMO DINÁMICO DE ASIGNACIÓN ---
     asignaciones_terceros = {}
     terceros_disp = mejores_8_terceros.copy()
     
-    # Estos son los 8 líderes que, por llave, van contra un tercero
     slots_vs_terceros = ["1A", "1B", "1C", "1D", "1E", "1F", "1G", "1H"]
     
     for slot in slots_vs_terceros:
         if not terceros_disp: break
-        grupo_lider = slot[-1] # Letra del grupo del líder (Ej: 'A')
+        grupo_lider = slot[-1]
         
         asignado = False
-        # Buscar el mejor tercero disponible que NO sea del mismo grupo
         for t in terceros_disp:
             if t["Grupo"][-1] != grupo_lider:
                 asignaciones_terceros[slot] = t["Equipo"]
@@ -113,12 +116,10 @@ def resolve_full_bracket(group_tables, df_thirds, ko_data):
                 asignado = True
                 break
         
-        # Fallback de seguridad por si quedan arrinconados al final
         if not asignado and terceros_disp:
             t = terceros_disp.pop(0)
             asignaciones_terceros[slot] = t["Equipo"]
 
-    # Función interna para nombrar las llaves
     def get_team(slot):
         if slot.startswith("1") or slot.startswith("2"): 
             return clasificados.get(slot, f"Por definir ({slot})")
@@ -127,7 +128,6 @@ def resolve_full_bracket(group_tables, df_thirds, ko_data):
             return asignaciones_terceros.get(lider_slot, "Esperando Tercero...")
         return slot
 
-    # Llaves oficiales de R32 adaptadas a la selección dinámica
     slots_r32 = [
         ("1A", "3rd_from_1A"), ("1B", "3rd_from_1B"), ("1C", "3rd_from_1C"), ("1D", "3rd_from_1D"),
         ("1E", "3rd_from_1E"), ("1F", "3rd_from_1F"), ("1G", "3rd_from_1G"), ("1H", "3rd_from_1H"),
@@ -136,7 +136,6 @@ def resolve_full_bracket(group_tables, df_thirds, ko_data):
     ]
     r32 = [{"id": i, "L_team": get_team(l), "V_team": get_team(v)} for i, (l, v) in enumerate(slots_r32)]
     
-    # --- RESTO DEL BRACKET (No cambia) ---
     r16_slots = [(0, 12), (1, 13), (2, 14), (3, 15), (4, 8), (5, 9), (6, 10), (7, 11)]
     r16 = [{"id": i, "L_team": get_winner(ko_data.get(f"R32_{l}"), r32[l]["L_team"], r32[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R32_{v}"), r32[v]["L_team"], r32[v]["V_team"])} for i, (l, v) in enumerate(r16_slots)]
     
@@ -169,7 +168,7 @@ if "ko_predictions" not in data["users"][user]: data["users"][user]["ko_predicti
 
 t_pred, t_real, t_puntos = st.tabs(["🔮 Mi Predicción", "🌍 Realidad del Mundial", "🥇 Ranking y Puntuación"])
 
-# --- FUNCION INTERACTIVA PARA BRACKETS (ACTUALIZADA) ---
+# --- FUNCION INTERACTIVA PARA BRACKETS ---
 def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False):
     rondas = [("R32", "Dieciseisavos de Final"), ("R16", "Octavos de Final"), ("QF", "Cuartos de Final"), ("SF", "Semifinales"), ("Final", "Gran Final")]
     for r_key, r_name in rondas:
@@ -196,12 +195,11 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
                 else:
                     c6.caption("Esperando cruces...")
             
-            # BOTÓN INDIVIDUAL POR FASE
             if not read_only:
-                st.write("") # Espacio visual
+                st.write("") 
                 if st.button(f"Actualizar y Avanzar a la siguiente ronda ({r_name})", key=f"btn_save_ko_{key_prefix}_{r_key}"):
                     save_data(data)
-                    st.rerun() # Esto recarga la app y pasa a los equipos a la siguiente llave mágicamente.
+                    st.rerun() 
 
 # ================= TAB 1: MI PREDICCIÓN =================
 with t_pred:
@@ -225,13 +223,18 @@ with t_pred:
                 save_data(data)
                 st.success("Grupo simulado.")
         
-        u_tables, u_thirds, _ = get_all_group_tables(data["users"][user]["group_predictions"])
+        u_tables, _, df_u_thirds = get_all_group_tables(data["users"][user]["group_predictions"])
         st.subheader("📋 Así lucen tus grupos según tus predicciones:")
         cx = st.columns(3)
         for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
             with cx[idx % 3]:
                 st.write(f"**{g}**")
                 st.dataframe(u_tables[g][["Equipo", "Pts", "GD"]], hide_index=True)
+                
+        # AHORA SÍ SE IMPRIME LA TABLA DE TERCEROS EN TU PREDICCIÓN
+        st.divider()
+        st.subheader("🥉 Tus Mejores Terceros")
+        st.dataframe(df_u_thirds[["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]], hide_index=True)
 
     with st_p2:
         st.subheader("🎯 Tu Camino Hacia El Campeón")
@@ -282,7 +285,7 @@ with t_real:
             st.dataframe(r_tables[g], hide_index=True)
             
     st.subheader("🥉 Tabla Oficial de Terceros")
-    st.dataframe(df_r_thirds, hide_index=True)
+    st.dataframe(df_r_thirds[["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]], hide_index=True)
     
     st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
     real_bracket = resolve_full_bracket(r_tables, df_r_thirds, data["real_results"]["ko_results"])
