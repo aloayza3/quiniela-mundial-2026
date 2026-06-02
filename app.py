@@ -73,8 +73,6 @@ def get_all_group_tables(resultados_dict):
             thirds.append(tercero)
             
     df_thirds = pd.DataFrame(thirds).sort_values(by=["Pts", "GD", "GF"], ascending=False).reset_index(drop=True)
-    
-    # Agregamos una columna visual para saber quién pasa
     if not df_thirds.empty:
         df_thirds["Avanza"] = ["✅ Sí" if i < 8 else "❌ No" for i in range(len(df_thirds))]
         
@@ -88,6 +86,13 @@ def get_winner(match_data, team_l, team_v):
     elif l_score < v_score: return team_v
     return team_l if match_data.get("avanza", "L") == "L" else team_v
 
+def get_loser(match_data, team_l, team_v):
+    if not match_data: return "Por definir"
+    l_score, v_score = match_data.get("l", 0), match_data.get("v", 0)
+    if l_score > v_score: return team_v
+    elif l_score < v_score: return team_l
+    return team_v if match_data.get("avanza", "L") == "L" else team_l
+
 def resolve_full_bracket(group_tables, df_thirds, ko_data):
     clasificados = {}
     for g, tabla in group_tables.items():
@@ -95,27 +100,28 @@ def resolve_full_bracket(group_tables, df_thirds, ko_data):
             clasificados[f"1{g[-1]}"] = tabla.iloc[0]["Equipo"]
             clasificados[f"2{g[-1]}"] = tabla.iloc[1]["Equipo"]
 
-    # Extraer la lista de los 8 mejores terceros
     mejores_8_terceros = df_thirds.head(8).to_dict('records') if not df_thirds.empty else []
 
-    # --- ALGORITMO DINÁMICO DE ASIGNACIÓN ---
+    # --- ALGORITMO OFICIAL DE ASIGNACIÓN (REGLAS 16AVOS) ---
+    third_place_targets = {
+        "1E": "ABCDF", "1I": "CDFGH", "1A": "CEFHI", "1L": "EHIJK", 
+        "1D": "BEFIJ", "1G": "AEHIJ", "1B": "EFGIJ", "1K": "DEIJL"
+    }
+    
     asignaciones_terceros = {}
     terceros_disp = mejores_8_terceros.copy()
-    
-    slots_vs_terceros = ["1A", "1B", "1C", "1D", "1E", "1F", "1G", "1H"]
+    slots_vs_terceros = ["1E", "1I", "1A", "1L", "1D", "1G", "1B", "1K"]
     
     for slot in slots_vs_terceros:
         if not terceros_disp: break
-        grupo_lider = slot[-1]
-        
+        allowed_groups = third_place_targets[slot]
         asignado = False
         for t in terceros_disp:
-            if t["Grupo"][-1] != grupo_lider:
+            if t["Grupo"][-1] in allowed_groups:
                 asignaciones_terceros[slot] = t["Equipo"]
                 terceros_disp.remove(t)
                 asignado = True
                 break
-        
         if not asignado and terceros_disp:
             t = terceros_disp.pop(0)
             asignaciones_terceros[slot] = t["Equipo"]
@@ -128,27 +134,48 @@ def resolve_full_bracket(group_tables, df_thirds, ko_data):
             return asignaciones_terceros.get(lider_slot, "Esperando Tercero...")
         return slot
 
+    # --- R32: DIECISEISAVOS (M73 al M88) ---
     slots_r32 = [
-        ("1A", "3rd_from_1A"), ("1B", "3rd_from_1B"), ("1C", "3rd_from_1C"), ("1D", "3rd_from_1D"),
-        ("1E", "3rd_from_1E"), ("1F", "3rd_from_1F"), ("1G", "3rd_from_1G"), ("1H", "3rd_from_1H"),
-        ("1I", "2J"), ("1J", "2I"), ("1K", "2L"), ("1L", "2K"),
-        ("2A", "2B"), ("2C", "2D"), ("2E", "2F"), ("2G", "2H")
+        ("2A", "2B"),              # id 0 (M73)
+        ("1E", "3rd_from_1E"),     # id 1 (M74)
+        ("1F", "2C"),              # id 2 (M75)
+        ("1C", "2F"),              # id 3 (M76)
+        ("1I", "3rd_from_1I"),     # id 4 (M77)
+        ("2E", "2I"),              # id 5 (M78)
+        ("1A", "3rd_from_1A"),     # id 6 (M79)
+        ("1L", "3rd_from_1L"),     # id 7 (M80)
+        ("1D", "3rd_from_1D"),     # id 8 (M81)
+        ("1G", "3rd_from_1G"),     # id 9 (M82)
+        ("2K", "2L"),              # id 10 (M83)
+        ("1H", "2J"),              # id 11 (M84)
+        ("1B", "3rd_from_1B"),     # id 12 (M85)
+        ("1J", "2H"),              # id 13 (M86)
+        ("1K", "3rd_from_1K"),     # id 14 (M87)
+        ("2D", "2G")               # id 15 (M88)
     ]
     r32 = [{"id": i, "L_team": get_team(l), "V_team": get_team(v)} for i, (l, v) in enumerate(slots_r32)]
     
-    r16_slots = [(0, 12), (1, 13), (2, 14), (3, 15), (4, 8), (5, 9), (6, 10), (7, 11)]
+    # --- R16: OCTAVOS (M89 al M96) ---
+    r16_slots = [(1, 4), (0, 2), (3, 5), (6, 7), (10, 11), (8, 9), (13, 15), (12, 14)]
     r16 = [{"id": i, "L_team": get_winner(ko_data.get(f"R32_{l}"), r32[l]["L_team"], r32[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R32_{v}"), r32[v]["L_team"], r32[v]["V_team"])} for i, (l, v) in enumerate(r16_slots)]
     
-    qf_slots = [(0, 4), (1, 5), (2, 6), (3, 7)]
+    # --- QF: CUARTOS (M97 al M100) ---
+    qf_slots = [(0, 1), (4, 5), (2, 3), (6, 7)]
     qf = [{"id": i, "L_team": get_winner(ko_data.get(f"R16_{l}"), r16[l]["L_team"], r16[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R16_{v}"), r16[v]["L_team"], r16[v]["V_team"])} for i, (l, v) in enumerate(qf_slots)]
     
-    sf_slots = [(0, 2), (1, 3)]
+    # --- SF: SEMIFINALES (M101 y M102) ---
+    sf_slots = [(0, 1), (2, 3)]
     sf = [{"id": i, "L_team": get_winner(ko_data.get(f"QF_{l}"), qf[l]["L_team"], qf[l]["V_team"]), "V_team": get_winner(ko_data.get(f"QF_{v}"), qf[v]["L_team"], qf[v]["V_team"])} for i, (l, v) in enumerate(sf_slots)]
     
+    # --- TERCER PUESTO (M103) ---
+    third = [{"id": 0, "L_team": get_loser(ko_data.get(f"SF_0"), sf[0]["L_team"], sf[0]["V_team"]), "V_team": get_loser(ko_data.get(f"SF_1"), sf[1]["L_team"], sf[1]["V_team"])}]
+    
+    # --- FINAL (M104) ---
     final = [{"id": 0, "L_team": get_winner(ko_data.get(f"SF_0"), sf[0]["L_team"], sf[0]["V_team"]), "V_team": get_winner(ko_data.get(f"SF_1"), sf[1]["L_team"], sf[1]["V_team"])}]
+    
     campeon = get_winner(ko_data.get("Final_0"), final[0]["L_team"], final[0]["V_team"])
     
-    return {"R32": r32, "R16": r16, "QF": qf, "SF": sf, "Final": final, "Campeon": campeon}
+    return {"R32": r32, "R16": r16, "QF": qf, "SF": sf, "Third": third, "Final": final, "Campeon": campeon}
     
 # --- INTERFAZ ---
 st.set_page_config(page_title="Quiniela Pro Mundial 2026", layout="wide")
@@ -170,7 +197,14 @@ t_pred, t_real, t_puntos = st.tabs(["🔮 Mi Predicción", "🌍 Realidad del Mu
 
 # --- FUNCION INTERACTIVA PARA BRACKETS ---
 def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False):
-    rondas = [("R32", "Dieciseisavos de Final"), ("R16", "Octavos de Final"), ("QF", "Cuartos de Final"), ("SF", "Semifinales"), ("Final", "Gran Final")]
+    rondas = [
+        ("R32", "Dieciseisavos de Final"), 
+        ("R16", "Octavos de Final"), 
+        ("QF", "Cuartos de Final"), 
+        ("SF", "Semifinales"), 
+        ("Third", "Partido por el Tercer Puesto"),
+        ("Final", "Gran Final")
+    ]
     for r_key, r_name in rondas:
         with st.expander(f"➔ {r_name}", expanded=True):
             for match in bracket_dict[r_key]:
@@ -231,7 +265,6 @@ with t_pred:
                 st.write(f"**{g}**")
                 st.dataframe(u_tables[g][["Equipo", "Pts", "GD"]], hide_index=True)
                 
-        # AHORA SÍ SE IMPRIME LA TABLA DE TERCEROS EN TU PREDICCIÓN
         st.divider()
         st.subheader("🥉 Tus Mejores Terceros")
         st.dataframe(df_u_thirds[["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]], hide_index=True)
@@ -323,6 +356,7 @@ with t_puntos:
         pts += len(extraer_equipos(ub["R16"]).intersection(extraer_equipos(rb["R16"]))) * 2
         pts += len(extraer_equipos(ub["QF"]).intersection(extraer_equipos(rb["QF"]))) * 4
         pts += len(extraer_equipos(ub["SF"]).intersection(extraer_equipos(rb["SF"]))) * 8
+        pts += len(extraer_equipos(ub["Third"]).intersection(extraer_equipos(rb["Third"]))) * 8
         pts += len(extraer_equipos(ub["Final"]).intersection(extraer_equipos(rb["Final"]))) * 16
         
         if ub["Campeon"] == rb["Campeon"] and rb["Campeon"] != "Por definir": pts += 32
@@ -353,7 +387,7 @@ with t_puntos:
     2. **En Fase Eliminatoria (Por Equipo Clasificado):**
        * **2 Puntos** por cada equipo que metas correctamente en **Octavos de Final** (R16).
        * **4 Puntos** por cada equipo que metas correctamente en **Cuartos de Final** (QF).
-       * **8 Puntos** por cada equipo que metas correctamente en **Semifinales** (SF).
+       * **8 Puntos** por cada equipo que metas correctamente en **Semifinales** (SF) y al **Tercer Puesto**.
        * **16 Puntos** por cada equipo que metas correctamente en la **Gran Final**.
        * **32 Puntos** adicionales si aciertas exactamente al **Campeón del Mundo**.
     """)
