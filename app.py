@@ -2,9 +2,11 @@ import streamlit as st
 import json
 import os
 import pandas as pd
+from datetime import datetime, timedelta, timezone
 
 # --- CONFIGURACIÓN DE DATOS ---
 DATA_FILE = "quiniela_2026_pro.json"
+PREDICTION_LOCK_DEADLINE = datetime(2026, 6, 10, 12, 0, tzinfo=timezone(timedelta(hours=1), "CET"))
 
 GRUPOS_EQUIPOS = {
     "Grupo A": ["México", "Sudáfrica", "Corea del Sur", "Chequia"],
@@ -52,6 +54,12 @@ def load_data():
 
 def save_data(data):
     with open(DATA_FILE, "w") as f: json.dump(data, f, indent=4)
+
+def predictions_are_locked():
+    return datetime.now(timezone.utc) >= PREDICTION_LOCK_DEADLINE.astimezone(timezone.utc)
+
+def prediction_lock_message():
+    return f"Las predicciones quedaron bloqueadas el {PREDICTION_LOCK_DEADLINE:%d/%m/%Y a las %H:%M} CET."
 
 # --- PROCESAMIENTO DE MATRICES ---
 def get_all_group_tables(resultados_dict):
@@ -188,6 +196,7 @@ def resolve_full_bracket(group_tables, df_thirds, ko_data):
 # --- INTERFAZ ---
 st.set_page_config(page_title="Quiniela Pro Mundial 2026", layout="wide")
 data = load_data()
+predictions_locked = predictions_are_locked()
 
 st.sidebar.title("🏆 Configuración")
 user = st.sidebar.text_input("Tu Nombre de Jugador:")
@@ -301,6 +310,8 @@ def UI_prediccion_jugador(player_name, player_data, key_prefix):
 # ================= TAB 1: MI PREDICCIÓN =================
 with t_pred:
     st.header(f"Simulación Completa de {user}")
+    if predictions_locked:
+        st.warning(prediction_lock_message())
     st_p1, st_p2 = st.tabs(["Fase de Grupos", "Fase Eliminatoria (Bracket)"])
     
     with st_p1:
@@ -310,10 +321,13 @@ with t_pred:
                 m_id = f"{g_sel}_{i}"
                 cur = data["users"][user]["group_predictions"].get(m_id, {"l": 0, "v": 0})
                 c1, c2, c3, c4, c5 = st.columns([3,1,1,1,3])
-                c1.write(l); l_in = c2.number_input("", 0, 20, cur["l"], key=f"u_l_{m_id}", label_visibility="collapsed")
-                c3.write("vs"); v_in = c4.number_input("", 0, 20, cur["v"], key=f"u_v_{m_id}", label_visibility="collapsed")
+                c1.write(l); l_in = c2.number_input("", 0, 20, cur["l"], key=f"u_l_{m_id}", disabled=predictions_locked, label_visibility="collapsed")
+                c3.write("vs"); v_in = c4.number_input("", 0, 20, cur["v"], key=f"u_v_{m_id}", disabled=predictions_locked, label_visibility="collapsed")
                 c5.write(v)
-            if st.form_submit_button("Guardar Resultados del Grupo"):
+            if st.form_submit_button("Guardar Resultados del Grupo", disabled=predictions_locked):
+                if predictions_are_locked():
+                    st.error(prediction_lock_message())
+                    st.stop()
                 for i, _ in enumerate(PARTIDOS_GRUPOS[g_sel]):
                     m_id = f"{g_sel}_{i}"
                     data["users"][user]["group_predictions"][m_id] = {"l": st.session_state[f"u_l_{m_id}"], "v": st.session_state[f"u_v_{m_id}"]}
@@ -338,7 +352,7 @@ with t_pred:
         user_bracket = resolve_full_bracket(u_tables, df_u_thirds, data["users"][user]["ko_predictions"])
         
         st.metric(label="🏆 TU CAMPEÓN PREDICHO", value=user_bracket["Campeon"])
-        UI_fase_eliminatoria(user_bracket, data["users"][user]["ko_predictions"], "u_ko")
+        UI_fase_eliminatoria(user_bracket, data["users"][user]["ko_predictions"], "u_ko", read_only=predictions_locked)
 
 # ================= TAB 2: OTROS JUGADORES =================
 with t_otros:
