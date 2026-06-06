@@ -861,6 +861,27 @@ st.sidebar.title("🏆 Configuración")
 user = st.sidebar.text_input("Tu Nombre de Jugador:")
 admin_mode = st.sidebar.toggle("Modo Administrador (Resultados Oficiales)")
 
+if admin_mode:
+    st.sidebar.divider()
+    st.sidebar.subheader("💾 Backup de Datos")
+    backup_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_filename = f"quiniela_backup_{backup_timestamp}.json"
+
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "rb") as f:
+            backup_data = f.read()
+        st.sidebar.caption(f"Archivo actual: {DATA_FILE}")
+    else:
+        backup_data = json.dumps(data, indent=4, ensure_ascii=False).encode("utf-8")
+        st.sidebar.caption(f"{DATA_FILE} todavía no existe. Se descargará el estado actual en memoria.")
+
+    st.sidebar.download_button(
+        "Descargar JSON",
+        data=backup_data,
+        file_name=backup_filename,
+        mime="application/json",
+    )
+
 if not user:
     st.info("👈 Por favor ingresa tu nombre en la barra lateral para sincronizar tus datos.")
     st.stop()
