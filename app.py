@@ -1034,6 +1034,82 @@ def UI_admin_official_r32():
                     st.warning("Bracket oficial guardado parcialmente.")
                 st.rerun()
 
+def build_group_match_rows(group_name, group_results):
+    rows = []
+    for i, (local, visitante) in enumerate(PARTIDOS_GRUPOS[group_name]):
+        m_id = f"{group_name}_{i}"
+        result = group_results.get(m_id)
+        if result:
+            rows.append({
+                "Grupo": group_name,
+                "Partido": f"{local} vs {visitante}",
+                "Resultado": f"{result['l']} - {result['v']}",
+                "Estado": "Finalizado",
+            })
+        else:
+            rows.append({
+                "Grupo": group_name,
+                "Partido": f"{local} vs {visitante}",
+                "Resultado": "Pendiente",
+                "Estado": "Pendiente",
+            })
+    return rows
+
+def UI_real_group_results_view(group_results):
+    st.subheader("📌 Resultados Reales de Fase de Grupos")
+    total_matches = sum(len(matches) for matches in PARTIDOS_GRUPOS.values())
+    played_matches = sum(
+        1
+        for group_name, matches in PARTIDOS_GRUPOS.items()
+        for i, _ in enumerate(matches)
+        if f"{group_name}_{i}" in group_results
+    )
+    st.metric("Partidos con resultado oficial", f"{played_matches}/{total_matches}")
+
+    group_options = ["Todos los grupos"] + list(PARTIDOS_GRUPOS.keys())
+    selected_group = st.selectbox("Selecciona una vista:", group_options, key="real_group_results_view")
+
+    if selected_group == "Todos los grupos":
+        for group_name in PARTIDOS_GRUPOS.keys():
+            rows = build_group_match_rows(group_name, group_results)
+            finished_count = sum(1 for row in rows if row["Estado"] == "Finalizado")
+            with st.expander(f"{group_name} ({finished_count}/{len(rows)} jugados)", expanded=finished_count > 0):
+                st.dataframe(pd.DataFrame(rows)[["Partido", "Resultado", "Estado"]], hide_index=True)
+    else:
+        rows = build_group_match_rows(selected_group, group_results)
+        st.dataframe(pd.DataFrame(rows)[["Partido", "Resultado", "Estado"]], hide_index=True)
+
+def UI_admin_group_results():
+    st.subheader("Resultados Reales de Grupos")
+    group_results = data["real_results"]["group_results"]
+    g_adm = st.selectbox("Grupo Real:", list(PARTIDOS_GRUPOS.keys()), key="admin_group_results_group")
+
+    with st.form("f_real_grp"):
+        for i, (local, visitante) in enumerate(PARTIDOS_GRUPOS[g_adm]):
+            m_id = f"{g_adm}_{i}"
+            cur = group_results.get(m_id, {"l": 0, "v": 0})
+            c0, c1, c2, c3, c4, c5 = st.columns([1.3, 3, 1, 0.7, 1, 3])
+            c0.checkbox("Finalizado", value=m_id in group_results, key=f"r_played_{m_id}")
+            c1.write(local)
+            c2.number_input("", 0, 20, cur["l"], key=f"r_l_{m_id}", label_visibility="collapsed")
+            c3.write("vs")
+            c4.number_input("", 0, 20, cur["v"], key=f"r_v_{m_id}", label_visibility="collapsed")
+            c5.write(visitante)
+
+        if st.form_submit_button("Publicar Resultados Reales de Grupo"):
+            for i, _ in enumerate(PARTIDOS_GRUPOS[g_adm]):
+                m_id = f"{g_adm}_{i}"
+                if st.session_state[f"r_played_{m_id}"]:
+                    group_results[m_id] = {
+                        "l": st.session_state[f"r_l_{m_id}"],
+                        "v": st.session_state[f"r_v_{m_id}"],
+                    }
+                else:
+                    group_results.pop(m_id, None)
+            save_data(data)
+            st.success("Datos oficiales guardados.")
+            st.rerun()
+
 def UI_prediccion_jugador(player_name, player_data, key_prefix):
     st.header(f"Predicción de {player_name}")
     st_p1, st_p2, st_p3 = st.tabs(["Fase de Grupos", "Fase Eliminatoria (Bracket)", "Bracket Oficial"])
@@ -1144,24 +1220,10 @@ with t_real:
     
     if admin_mode:
         st.subheader("🛠️ Panel de Carga de Datos Oficiales (Admin)")
-        adm_mode_sel = st.radio("¿Qué deseas actualizar?", ["Resultados de Grupos", "Bracket Oficial R32", "Fase Eliminatoria"])
+        adm_mode_sel = st.radio("¿Qué deseas actualizar?", ["Resultados de Grupos", "Bracket Oficial R32", "Fase Eliminatoria"], key="admin_real_update_mode")
         
         if adm_mode_sel == "Resultados de Grupos":
-            g_adm = st.selectbox("Grupo Real:", list(PARTIDOS_GRUPOS.keys()))
-            with st.form("f_real_grp"):
-                for i, (l, v) in enumerate(PARTIDOS_GRUPOS[g_adm]):
-                    m_id = f"{g_adm}_{i}"
-                    cur = data["real_results"]["group_results"].get(m_id, {"l": 0, "v": 0})
-                    c1, c2, c3, c4, c5 = st.columns([3,1,1,1,3])
-                    c1.write(l); l_a = c2.number_input("", 0, 20, cur["l"], key=f"r_l_{m_id}", label_visibility="collapsed")
-                    c3.write("vs"); v_a = c4.number_input("", 0, 20, cur["v"], key=f"r_v_{m_id}", label_visibility="collapsed")
-                    c5.write(v)
-                if st.form_submit_button("Publicar Resultados Reales de Grupo"):
-                    for i, _ in enumerate(PARTIDOS_GRUPOS[g_adm]):
-                        m_id = f"{g_adm}_{i}"
-                        data["real_results"]["group_results"][m_id] = {"l": st.session_state[f"r_l_{m_id}"], "v": st.session_state[f"r_v_{m_id}"]}
-                    save_data(data)
-                    st.success("Datos oficiales guardados.")
+            UI_admin_group_results()
         elif adm_mode_sel == "Bracket Oficial R32":
             UI_admin_official_r32()
         else:
@@ -1171,28 +1233,37 @@ with t_real:
             UI_fase_eliminatoria(real_bracket, data["real_results"]["ko_results"], "r_ko")
 
     st.divider()
-    
-    st.subheader("📊 Tablas de Posiciones Reales de la FIFA")
+
+    real_view = st.radio(
+        "Visualizar datos reales:",
+        ["Partidos de Grupos", "Tablas de Posiciones", "Llave Eliminatoria"],
+        horizontal=True,
+        key="real_public_view",
+    )
     r_tables, _, df_r_thirds = get_all_group_tables(data["real_results"]["group_results"])
-    
-    cx2 = st.columns(3)
-    for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
-        with cx2[idx % 3]:
-            st.write(f"**{g}**")
-            st.dataframe(r_tables[g], hide_index=True)
-            
-    st.subheader("🥉 Tabla de Terceros por Marcadores")
-    st.caption("La clasificación oficial de terceros puede depender de fair play y ranking FIFA; usa el bracket oficial R32 cargado por el administrador para la llave real.")
-    st.dataframe(df_r_thirds[["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]], hide_index=True)
-    
-    st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
-    real_bracket = resolve_real_bracket(data["real_results"])
-    if official_bracket_is_ready(data["real_results"].get("official_r32", {})):
-        st.caption("Usando el bracket oficial R32 cargado por el administrador.")
+
+    if real_view == "Partidos de Grupos":
+        UI_real_group_results_view(data["real_results"]["group_results"])
+    elif real_view == "Tablas de Posiciones":
+        st.subheader("📊 Tablas de Posiciones Reales de la FIFA")
+        cx2 = st.columns(3)
+        for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
+            with cx2[idx % 3]:
+                st.write(f"**{g}**")
+                st.dataframe(r_tables[g], hide_index=True)
+
+        st.subheader("🥉 Tabla de Terceros por Marcadores")
+        st.caption("La clasificación oficial de terceros puede depender de fair play y ranking FIFA; usa el bracket oficial R32 cargado por el administrador para la llave real.")
+        st.dataframe(df_r_thirds[["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]], hide_index=True)
     else:
-        st.caption("Bracket provisional calculado desde resultados de grupos hasta que el administrador cargue el bracket oficial R32.")
-    st.success(f"🏆 CAMPEÓN REAL ACTUAL: {real_bracket['Campeon']}")
-    UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True)
+        st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
+        real_bracket = resolve_real_bracket(data["real_results"])
+        if official_bracket_is_ready(data["real_results"].get("official_r32", {})):
+            st.caption("Usando el bracket oficial R32 cargado por el administrador.")
+        else:
+            st.caption("Bracket provisional calculado desde resultados de grupos hasta que el administrador cargue el bracket oficial R32.")
+        st.success(f"🏆 CAMPEÓN REAL ACTUAL: {real_bracket['Campeon']}")
+        UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True)
 
 # ================= TAB 4: POSICIONES Y REGLAS =================
 with t_puntos:
