@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 
 # --- CONFIGURACIÓN DE DATOS ---
-DATA_FILE = "quiniela_2026_pro.json"
+DATA_FILE = "quiniela_2026_auto.json"
 APP_SCHEMA_VERSION = 3
 PREDICTION_LOCK_DEADLINE = datetime(2026, 6, 10, 12, 0, tzinfo=timezone(timedelta(hours=1), "CET"))
 
