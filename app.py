@@ -1288,16 +1288,25 @@ with t_puntos:
             pts += 32
         return pts
 	    
-    def calcular_puntos_totales(user_obj, real_obj):
-        pts = 0
+    def calcular_aciertos_grupos(user_obj, real_obj):
+        stats = {"tendencias": 0, "exactos": 0, "puntos": 0}
         u_grp = user_obj.get("group_predictions", {})
         r_grp = real_obj.get("group_results", {})
         for m_id, r_res in r_grp.items():
             if m_id in u_grp:
                 pl, pv = u_grp[m_id]["l"], u_grp[m_id]["v"]
                 rl, rv = r_res["l"], r_res["v"]
-                if pl == rl and pv == rv: pts += 3
-                elif (pl > pv and rl > rv) or (pl < pv and rl < rv) or (pl == pv and rl == rv): pts += 1
+                if pl == rl and pv == rv:
+                    stats["exactos"] += 1
+                    stats["puntos"] += 3
+                elif (pl > pv and rl > rv) or (pl < pv and rl < rv) or (pl == pv and rl == rv):
+                    stats["tendencias"] += 1
+                    stats["puntos"] += 1
+        return stats
+
+    def calcular_puntos_totales(user_obj, real_obj, group_stats=None):
+        pts = (group_stats or calcular_aciertos_grupos(user_obj, real_obj))["puntos"]
+        u_grp = user_obj.get("group_predictions", {})
 
         u_tables, _, df_u_thirds = get_all_group_tables(u_grp)
         
@@ -1318,7 +1327,13 @@ with t_puntos:
     ranking_full = []
     ranking_official = []
     for u_name, u_data in data["users"].items():
-        ranking_full.append({"Jugador": u_name, "Puntos Totales": calcular_puntos_totales(u_data, data["real_results"])})
+        group_stats = calcular_aciertos_grupos(u_data, data["real_results"])
+        ranking_full.append({
+            "Jugador": u_name,
+            "Tendencias Correctas": group_stats["tendencias"],
+            "Marcadores Exactos": group_stats["exactos"],
+            "Puntos Totales": calcular_puntos_totales(u_data, data["real_results"], group_stats),
+        })
         ranking_official.append({"Jugador": u_name, "Puntos Bracket Oficial": calcular_puntos_bracket_oficial(u_data, data["real_results"])})
 	        
     st.subheader("Predicción 1: Torneo Completo")
