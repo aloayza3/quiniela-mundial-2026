@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 DATA_FILE = "quiniela_2026_auto.json"
 APP_SCHEMA_VERSION = 3
 PREDICTION_LOCK_DEADLINE = datetime(2026, 6, 10, 12, 0, tzinfo=timezone(timedelta(hours=1), "CET"))
+OFFICIAL_BRACKET_LOCK_DEADLINE = datetime(2026, 6, 28, 20, 0, tzinfo=timezone(timedelta(hours=1), "CET"))
 
 GRUPOS_EQUIPOS = {
     "Grupo A": ["México", "Sudáfrica", "Corea del Sur", "Chequia"],
@@ -586,6 +587,12 @@ def predictions_are_locked():
 def prediction_lock_message():
     return f"Las predicciones quedaron bloqueadas el {PREDICTION_LOCK_DEADLINE:%d/%m/%Y a las %H:%M} CET."
 
+def official_bracket_predictions_are_locked():
+    return datetime.now(timezone.utc) >= OFFICIAL_BRACKET_LOCK_DEADLINE.astimezone(timezone.utc)
+
+def official_bracket_prediction_lock_message():
+    return f"Las predicciones del bracket oficial quedaron bloqueadas el {OFFICIAL_BRACKET_LOCK_DEADLINE:%d/%m/%Y a las %H:%M} CET."
+
 def build_annex_c_assignments():
     assignments = {}
     for raw_line in ANNEX_C_ROWS.strip().splitlines():
@@ -856,6 +863,7 @@ def resolve_full_bracket(group_tables, df_thirds, ko_data):
 st.set_page_config(page_title="Quiniela Pro Mundial 2026", layout="wide")
 data = load_data()
 predictions_locked = predictions_are_locked()
+official_bracket_predictions_locked = official_bracket_predictions_are_locked()
 
 st.sidebar.title("🏆 Configuración")
 user = st.sidebar.text_input("Tu Nombre de Jugador:")
@@ -1201,7 +1209,13 @@ with t_pred:
 
     with st_p3:
         st.subheader("🎯 Tu Predicción Desde El Bracket Oficial")
-        UI_prediccion_bracket_oficial(data["users"][user], "u_official_ko")
+        if official_bracket_predictions_locked:
+            st.warning(f"Predicción 2 bloqueada: {official_bracket_prediction_lock_message()}")
+        UI_prediccion_bracket_oficial(
+            data["users"][user],
+            "u_official_ko",
+            read_only=official_bracket_predictions_locked,
+        )
 
 # ================= TAB 2: OTROS JUGADORES =================
 with t_otros:
@@ -1304,6 +1318,25 @@ with t_puntos:
                     stats["puntos"] += 1
         return stats
 
+    def calcular_aciertos_r32_bracket_oficial(user_obj, real_obj):
+        stats = {"tendencias": 0, "exactos": 0, "puntos": 0}
+        u_ko = user_obj.get("official_bracket_predictions", {})
+        r_ko = real_obj.get("ko_results", {})
+        for i in range(16):
+            m_id = f"R32_{i}"
+            if m_id not in u_ko or m_id not in r_ko:
+                continue
+
+            pl, pv = u_ko[m_id]["l"], u_ko[m_id]["v"]
+            rl, rv = r_ko[m_id]["l"], r_ko[m_id]["v"]
+            if pl == rl and pv == rv:
+                stats["exactos"] += 1
+                stats["puntos"] += 3
+            elif (pl > pv and rl > rv) or (pl < pv and rl < rv) or (pl == pv and rl == rv):
+                stats["tendencias"] += 1
+                stats["puntos"] += 1
+        return stats
+
     def calcular_puntos_totales(user_obj, real_obj, group_stats=None):
         pts = (group_stats or calcular_aciertos_grupos(user_obj, real_obj))["puntos"]
         u_grp = user_obj.get("group_predictions", {})
@@ -1322,7 +1355,7 @@ with t_puntos:
 
         rb = resolve_official_bracket(official_r32, real_obj.get("ko_results", {}))
         ub = resolve_official_bracket(official_r32, user_obj.get("official_bracket_predictions", {}))
-        return calcular_puntos_bracket(ub, rb)
+        return calcular_aciertos_r32_bracket_oficial(user_obj, real_obj)["puntos"] + calcular_puntos_bracket(ub, rb)
 	
     ranking_full = []
     ranking_official = []
@@ -1334,7 +1367,13 @@ with t_puntos:
             "Marcadores Exactos": group_stats["exactos"],
             "Puntos Totales": calcular_puntos_totales(u_data, data["real_results"], group_stats),
         })
-        ranking_official.append({"Jugador": u_name, "Puntos Bracket Oficial": calcular_puntos_bracket_oficial(u_data, data["real_results"])})
+        r32_stats = calcular_aciertos_r32_bracket_oficial(u_data, data["real_results"])
+        ranking_official.append({
+            "Jugador": u_name,
+            "Tendencias R32": r32_stats["tendencias"],
+            "Marcadores Exactos R32": r32_stats["exactos"],
+            "Puntos Bracket Oficial": calcular_puntos_bracket_oficial(u_data, data["real_results"]),
+        })
 	        
     st.subheader("Predicción 1: Torneo Completo")
     if ranking_full:
@@ -1367,12 +1406,17 @@ with t_puntos:
     2. **Predicción 2 - Bracket Oficial**
        * Se activa cuando el administrador carga el bracket oficial de dieciseisavos.
        * Empieza desde ese bracket oficial y se puntúa en una tabla paralela.
+       * Las predicciones se bloquean el **28/06/2026 a las 20:00 CET**.
 
     3. **En Fase de Grupos (Por Partido):**
        * **3 Puntos:** Resultado Exacto (Le acertaste al marcador idéntico).
        * **1 Punto:** Tendencia Correcta (Acertaste al ganador o al empate, pero con otro marcador).
+    
+    4. **En Predicción 2 - Dieciseisavos/R32 (Por Partido):**
+       * **3 Puntos:** Marcador exacto del partido.
+       * **1 Punto:** Tendencia correcta (ganador o empate), pero con otro marcador.
        
-    4. **En Fase Eliminatoria (Por Equipo Clasificado):**
+    5. **En Fase Eliminatoria (Por Equipo Clasificado):**
        * **2 Puntos** por cada equipo que metas correctamente en **Octavos de Final** (R16).
        * **4 Puntos** por cada equipo que metas correctamente en **Cuartos de Final** (QF).
        * **8 Puntos** por cada equipo que metas correctamente en **Semifinales** (SF) y al **Tercer Puesto**.
