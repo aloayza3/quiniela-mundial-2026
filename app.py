@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 # --- CONFIGURACIÓN DE DATOS ---
 DATA_FILE = "quiniela_2026_auto.json"
 APP_SCHEMA_VERSION = 3
+ADMIN_PASSWORD = "EcCampeon26"
 PREDICTION_LOCK_DEADLINE = datetime(2026, 6, 10, 12, 0, tzinfo=timezone(timedelta(hours=1), "CET"))
 OFFICIAL_BRACKET_LOCK_DEADLINE = datetime(2026, 6, 28, 20, 0, tzinfo=timezone(timedelta(hours=1), "CET"))
 
@@ -557,6 +558,18 @@ def reset_all_user_predictions(data):
     for user_name in list(data.get("users", {}).keys()):
         data["users"][user_name] = empty_user_predictions()
 
+def normalize_participant_name(name):
+    return " ".join(name.split()).casefold()
+
+def find_duplicate_participant_groups(users):
+    grouped_names = {}
+    for user_name in users:
+        normalized_name = normalize_participant_name(user_name)
+        if not normalized_name:
+            continue
+        grouped_names.setdefault(normalized_name, []).append(user_name)
+    return [sorted(names, key=str.casefold) for names in grouped_names.values() if len(names) > 1]
+
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
@@ -867,7 +880,18 @@ official_bracket_predictions_locked = official_bracket_predictions_are_locked()
 
 st.sidebar.title("🏆 Configuración")
 user = st.sidebar.text_input("Tu Nombre de Jugador:")
-admin_mode = st.sidebar.toggle("Modo Administrador (Resultados Oficiales)")
+admin_requested = st.sidebar.toggle("Modo Administrador")
+admin_mode = False
+
+if admin_requested:
+    admin_password = st.sidebar.text_input("Contraseña de administrador:", type="password", key="admin_password")
+    if admin_password == ADMIN_PASSWORD:
+        admin_mode = True
+        st.sidebar.success("Modo administrador activado.")
+    elif admin_password:
+        st.sidebar.error("Contraseña incorrecta.")
+    else:
+        st.sidebar.info("Ingresa la contraseña para acceder al modo administrador.")
 
 if admin_mode:
     st.sidebar.divider()
@@ -1118,6 +1142,58 @@ def UI_admin_group_results():
             st.success("Datos oficiales guardados.")
             st.rerun()
 
+def UI_admin_participants(current_user):
+    st.subheader("👥 Administración de Participantes")
+    users = data.get("users", {})
+    participant_names = sorted(users.keys(), key=str.casefold)
+
+    duplicate_groups = find_duplicate_participant_groups(participant_names)
+    if duplicate_groups:
+        st.warning("Posibles participantes duplicados detectados por nombre:")
+        for duplicate_group in duplicate_groups:
+            st.write(f"- {', '.join(duplicate_group)}")
+    else:
+        st.info("No se detectan nombres duplicados ignorando mayúsculas, minúsculas y espacios extra.")
+
+    if not participant_names:
+        st.info("No hay participantes para eliminar.")
+        return
+
+    selected_participant = st.selectbox(
+        "Participante a eliminar:",
+        participant_names,
+        key="admin_delete_participant",
+    )
+    selected_data = users.get(selected_participant, {})
+    st.caption(
+        "Predicciones guardadas: "
+        f"{len(selected_data.get('group_predictions', {}))} partidos de grupos, "
+        f"{len(selected_data.get('ko_predictions', {}))} partidos de llave, "
+        f"{len(selected_data.get('official_bracket_predictions', {}))} partidos de bracket oficial."
+    )
+
+    if selected_participant == current_user:
+        st.warning("No puedes eliminar el participante activo de esta sesión. Cambia temporalmente tu nombre de jugador y vuelve a intentarlo.")
+        return
+
+    with st.form("form_delete_participant"):
+        confirmation = st.text_input(
+            f'Para confirmar, escribe exactamente: "{selected_participant}"',
+            key="delete_participant_confirmation",
+        )
+        delete_submitted = st.form_submit_button("Eliminar participante")
+
+        if delete_submitted:
+            if confirmation != selected_participant:
+                st.error("La confirmación no coincide con el participante seleccionado.")
+            elif selected_participant not in data["users"]:
+                st.error("Ese participante ya no existe en los datos.")
+            else:
+                del data["users"][selected_participant]
+                save_data(data)
+                st.success(f"Participante eliminado: {selected_participant}")
+                st.rerun()
+
 def UI_prediccion_jugador(player_name, player_data, key_prefix):
     st.header(f"Predicción de {player_name}")
     st_p1, st_p2, st_p3 = st.tabs(["Fase de Grupos", "Fase Eliminatoria (Bracket)", "Bracket Oficial"])
@@ -1233,18 +1309,24 @@ with t_real:
     st.header("🌍 Estado Real del Mundial")
     
     if admin_mode:
-        st.subheader("🛠️ Panel de Carga de Datos Oficiales (Admin)")
-        adm_mode_sel = st.radio("¿Qué deseas actualizar?", ["Resultados de Grupos", "Bracket Oficial R32", "Fase Eliminatoria"], key="admin_real_update_mode")
+        st.subheader("🛠️ Panel Administrador")
+        adm_mode_sel = st.radio(
+            "¿Qué deseas actualizar?",
+            ["Resultados de Grupos", "Bracket Oficial R32", "Fase Eliminatoria", "Participantes"],
+            key="admin_real_update_mode",
+        )
         
         if adm_mode_sel == "Resultados de Grupos":
             UI_admin_group_results()
         elif adm_mode_sel == "Bracket Oficial R32":
             UI_admin_official_r32()
-        else:
+        elif adm_mode_sel == "Fase Eliminatoria":
             if not official_bracket_is_ready(data["real_results"].get("official_r32", {})):
                 st.warning("Carga el bracket oficial R32 antes de publicar resultados de fase eliminatoria.")
             real_bracket = resolve_real_bracket(data["real_results"])
             UI_fase_eliminatoria(real_bracket, data["real_results"]["ko_results"], "r_ko")
+        else:
+            UI_admin_participants(user)
 
     st.divider()
 
