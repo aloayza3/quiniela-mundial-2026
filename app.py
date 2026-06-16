@@ -1400,6 +1400,44 @@ with t_puntos:
                     stats["puntos"] += 1
         return stats
 
+    def sum_goal_totals(predictions, real_results):
+        predicted_goals = 0
+        real_goals = 0
+        for m_id, r_res in real_results.items():
+            real_goals += r_res["l"] + r_res["v"]
+            if m_id in predictions:
+                u_res = predictions[m_id]
+                predicted_goals += u_res["l"] + u_res["v"]
+        return predicted_goals, real_goals
+
+    def build_goal_total_stats(predicted_goals, real_goals):
+        return {
+            "display": f"{predicted_goals} / {real_goals}",
+            "difference": abs(predicted_goals - real_goals),
+        }
+
+    def calcular_goles_torneo_completo(user_obj, real_obj):
+        group_predicted_goals, group_real_goals = sum_goal_totals(
+            user_obj.get("group_predictions", {}),
+            real_obj.get("group_results", {}),
+        )
+        ko_predicted_goals, ko_real_goals = sum_goal_totals(
+            user_obj.get("ko_predictions", {}),
+            real_obj.get("ko_results", {}),
+        )
+
+        return build_goal_total_stats(
+            group_predicted_goals + ko_predicted_goals,
+            group_real_goals + ko_real_goals,
+        )
+
+    def calcular_goles_bracket_oficial(user_obj, real_obj):
+        predicted_goals, real_goals = sum_goal_totals(
+            user_obj.get("official_bracket_predictions", {}),
+            real_obj.get("ko_results", {}),
+        )
+        return build_goal_total_stats(predicted_goals, real_goals)
+
     def calcular_aciertos_r32_bracket_oficial(user_obj, real_obj):
         stats = {"tendencias": 0, "exactos": 0, "puntos": 0}
         u_ko = user_obj.get("official_bracket_predictions", {})
@@ -1443,23 +1481,32 @@ with t_puntos:
     ranking_official = []
     for u_name, u_data in data["users"].items():
         group_stats = calcular_aciertos_grupos(u_data, data["real_results"])
+        full_goal_stats = calcular_goles_torneo_completo(u_data, data["real_results"])
         ranking_full.append({
             "Jugador": u_name,
             "Tendencias Correctas": group_stats["tendencias"],
             "Marcadores Exactos": group_stats["exactos"],
+            "Goles Predichos/Reales": full_goal_stats["display"],
+            "Diferencia Goles": full_goal_stats["difference"],
             "Puntos Totales": calcular_puntos_totales(u_data, data["real_results"], group_stats),
         })
         r32_stats = calcular_aciertos_r32_bracket_oficial(u_data, data["real_results"])
+        official_goal_stats = calcular_goles_bracket_oficial(u_data, data["real_results"])
         ranking_official.append({
             "Jugador": u_name,
             "Tendencias R32": r32_stats["tendencias"],
             "Marcadores Exactos R32": r32_stats["exactos"],
+            "Goles Predichos/Reales": official_goal_stats["display"],
+            "Diferencia Goles": official_goal_stats["difference"],
             "Puntos Bracket Oficial": calcular_puntos_bracket_oficial(u_data, data["real_results"]),
         })
 	        
     st.subheader("Predicción 1: Torneo Completo")
     if ranking_full:
-        df_rank = pd.DataFrame(ranking_full).sort_values("Puntos Totales", ascending=False).reset_index(drop=True)
+        df_rank = pd.DataFrame(ranking_full).sort_values(
+            ["Puntos Totales", "Diferencia Goles"],
+            ascending=[False, True],
+        ).reset_index(drop=True)
         df_rank.index += 1
         st.table(df_rank)
     else:
@@ -1469,7 +1516,10 @@ with t_puntos:
     if not official_bracket_is_ready(data["real_results"].get("official_r32", {})):
         st.info("El ranking del bracket oficial se activará cuando el administrador cargue el R32 oficial completo.")
     elif ranking_official:
-        df_rank_official = pd.DataFrame(ranking_official).sort_values("Puntos Bracket Oficial", ascending=False).reset_index(drop=True)
+        df_rank_official = pd.DataFrame(ranking_official).sort_values(
+            ["Puntos Bracket Oficial", "Diferencia Goles"],
+            ascending=[False, True],
+        ).reset_index(drop=True)
         df_rank_official.index += 1
         st.table(df_rank_official)
     else:
@@ -1504,4 +1554,10 @@ with t_puntos:
        * **8 Puntos** por cada equipo que metas correctamente en **Semifinales** (SF) y al **Tercer Puesto**.
        * **16 Puntos** por cada equipo que metas correctamente en la **Gran Final**.
        * **32 Puntos** adicionales si aciertas exactamente al **Campeón del Mundo**.
+
+    6. **Criterio de Desempate: Total de Goles**
+       * La tabla se ordena primero por puntos.
+       * Si dos o más jugadores tienen los mismos puntos, queda arriba quien tenga menor **Diferencia Goles**.
+       * **Diferencia Goles** es la distancia absoluta entre los goles totales predichos y los goles reales de los partidos ya jugados.
+       * Este criterio no suma puntos: solo desempata jugadores con el mismo puntaje.
     """)
