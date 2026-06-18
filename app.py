@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import os
 import pandas as pd
+from html import escape
 from datetime import datetime, timedelta, timezone
 
 # --- CONFIGURACIÓN DE DATOS ---
@@ -39,6 +40,57 @@ PARTIDOS_GRUPOS = {
     "Grupo J": [("Argentina", "Argelia"), ("Austria", "Jordania"), ("Jordania", "Argelia"), ("Argentina", "Austria"), ("Argelia", "Austria"), ("Jordania", "Argentina")],
     "Grupo K": [("Portugal", "RD Congo"), ("Uzbekistán", "Colombia"), ("Colombia", "RD Congo"), ("Portugal", "Uzbekistán"), ("Colombia", "Portugal"), ("RD Congo", "Uzbekistán")],
     "Grupo L": [("Inglaterra", "Croacia"), ("Ghana", "Panamá"), ("Panamá", "Croacia"), ("Inglaterra", "Ghana"), ("Panamá", "Inglaterra"), ("Croacia", "Ghana")]
+}
+
+TEAM_FLAGS = {
+    "México": "🇲🇽",
+    "Sudáfrica": "🇿🇦",
+    "Corea del Sur": "🇰🇷",
+    "Chequia": "🇨🇿",
+    "Canadá": "🇨🇦",
+    "Bosnia y Herzegovina": "🇧🇦",
+    "Catar": "🇶🇦",
+    "Suiza": "🇨🇭",
+    "Brasil": "🇧🇷",
+    "Marruecos": "🇲🇦",
+    "Haití": "🇭🇹",
+    "Escocia": "🏴",
+    "Estados Unidos": "🇺🇸",
+    "Paraguay": "🇵🇾",
+    "Australia": "🇦🇺",
+    "Turquía": "🇹🇷",
+    "Alemania": "🇩🇪",
+    "Curazao": "🇨🇼",
+    "Costa de Marfil": "🇨🇮",
+    "Ecuador": "🇪🇨",
+    "Países Bajos": "🇳🇱",
+    "Japón": "🇯🇵",
+    "Suecia": "🇸🇪",
+    "Túnez": "🇹🇳",
+    "Bélgica": "🇧🇪",
+    "Egipto": "🇪🇬",
+    "Irán": "🇮🇷",
+    "Nueva Zelanda": "🇳🇿",
+    "España": "🇪🇸",
+    "Cabo Verde": "🇨🇻",
+    "Arabia Saudita": "🇸🇦",
+    "Uruguay": "🇺🇾",
+    "Francia": "🇫🇷",
+    "Senegal": "🇸🇳",
+    "Irak": "🇮🇶",
+    "Noruega": "🇳🇴",
+    "Argentina": "🇦🇷",
+    "Argelia": "🇩🇿",
+    "Austria": "🇦🇹",
+    "Jordania": "🇯🇴",
+    "Portugal": "🇵🇹",
+    "RD Congo": "🇨🇩",
+    "Uzbekistán": "🇺🇿",
+    "Colombia": "🇨🇴",
+    "Inglaterra": "🏴",
+    "Croacia": "🇭🇷",
+    "Ghana": "🇬🇭",
+    "Panamá": "🇵🇦",
 }
 
 ANNEX_C_THIRD_COLUMNS = ["1A", "1B", "1D", "1E", "1G", "1I", "1K", "1L"]
@@ -763,21 +815,21 @@ def get_all_teams():
 def resolve_bracket_from_r32(r32, ko_data):
     # --- R16: OCTAVOS (M89 al M96) ---
     r16_slots = [(1, 4), (0, 2), (3, 5), (6, 7), (10, 11), (8, 9), (13, 15), (12, 14)]
-    r16 = [{"id": i, "L_team": get_winner(ko_data.get(f"R32_{l}"), r32[l]["L_team"], r32[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R32_{v}"), r32[v]["L_team"], r32[v]["V_team"])} for i, (l, v) in enumerate(r16_slots)]
+    r16 = [{"id": i, "match_number": 89 + i, "L_team": get_winner(ko_data.get(f"R32_{l}"), r32[l]["L_team"], r32[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R32_{v}"), r32[v]["L_team"], r32[v]["V_team"])} for i, (l, v) in enumerate(r16_slots)]
     
     # --- QF: CUARTOS (M97 al M100) ---
     qf_slots = [(0, 1), (4, 5), (2, 3), (6, 7)]
-    qf = [{"id": i, "L_team": get_winner(ko_data.get(f"R16_{l}"), r16[l]["L_team"], r16[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R16_{v}"), r16[v]["L_team"], r16[v]["V_team"])} for i, (l, v) in enumerate(qf_slots)]
+    qf = [{"id": i, "match_number": 97 + i, "L_team": get_winner(ko_data.get(f"R16_{l}"), r16[l]["L_team"], r16[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R16_{v}"), r16[v]["L_team"], r16[v]["V_team"])} for i, (l, v) in enumerate(qf_slots)]
     
     # --- SF: SEMIFINALES (M101 y M102) ---
     sf_slots = [(0, 1), (2, 3)]
-    sf = [{"id": i, "L_team": get_winner(ko_data.get(f"QF_{l}"), qf[l]["L_team"], qf[l]["V_team"]), "V_team": get_winner(ko_data.get(f"QF_{v}"), qf[v]["L_team"], qf[v]["V_team"])} for i, (l, v) in enumerate(sf_slots)]
+    sf = [{"id": i, "match_number": 101 + i, "L_team": get_winner(ko_data.get(f"QF_{l}"), qf[l]["L_team"], qf[l]["V_team"]), "V_team": get_winner(ko_data.get(f"QF_{v}"), qf[v]["L_team"], qf[v]["V_team"])} for i, (l, v) in enumerate(sf_slots)]
     
     # --- TERCER PUESTO (M103) ---
-    third = [{"id": 0, "L_team": get_loser(ko_data.get(f"SF_0"), sf[0]["L_team"], sf[0]["V_team"]), "V_team": get_loser(ko_data.get(f"SF_1"), sf[1]["L_team"], sf[1]["V_team"])}]
+    third = [{"id": 0, "match_number": 103, "L_team": get_loser(ko_data.get(f"SF_0"), sf[0]["L_team"], sf[0]["V_team"]), "V_team": get_loser(ko_data.get(f"SF_1"), sf[1]["L_team"], sf[1]["V_team"])}]
     
     # --- FINAL (M104) ---
-    final = [{"id": 0, "L_team": get_winner(ko_data.get(f"SF_0"), sf[0]["L_team"], sf[0]["V_team"]), "V_team": get_winner(ko_data.get(f"SF_1"), sf[1]["L_team"], sf[1]["V_team"])}]
+    final = [{"id": 0, "match_number": 104, "L_team": get_winner(ko_data.get(f"SF_0"), sf[0]["L_team"], sf[0]["V_team"]), "V_team": get_winner(ko_data.get(f"SF_1"), sf[1]["L_team"], sf[1]["V_team"])}]
     
     campeon = get_winner(ko_data.get("Final_0"), final[0]["L_team"], final[0]["V_team"])
     
@@ -948,7 +1000,236 @@ normalize_user_data(data["users"][user])
 t_pred, t_otros, t_real, t_puntos = st.tabs(["🔮 Mi Predicción", "👥 Otros Jugadores", "🌍 Realidad del Mundial", "🥇 Ranking y Puntuación"])
 
 # --- FUNCION INTERACTIVA PARA BRACKETS ---
+def team_is_pending(team):
+    return any(token in team for token in ["Por definir", "Mejor", "Esperando"])
+
+def flag_for_team(team):
+    return "" if team_is_pending(team) else TEAM_FLAGS.get(team, "🏳️")
+
+def get_match_winner_side(match_data):
+    if not match_data:
+        return None
+    l_score = match_data.get("l", 0)
+    v_score = match_data.get("v", 0)
+    if l_score > v_score:
+        return "L"
+    if l_score < v_score:
+        return "V"
+    return match_data.get("avanza", "L")
+
+def render_tree_team(team, score, side, winner_side):
+    pending_class = " pending" if team_is_pending(team) else ""
+    winner_class = " winner" if winner_side == side else ""
+    score_html = "" if score is None else f"<span class='tree-score'>{score}</span>"
+    return (
+        f"<div class='tree-team{winner_class}{pending_class}'>"
+        f"<span class='tree-flag'>{escape(flag_for_team(team))}</span>"
+        f"<span class='tree-name'>{escape(team)}</span>"
+        f"{score_html}"
+        "</div>"
+    )
+
+def render_tree_match(round_key, match, storage_path):
+    m_id = f"{round_key}_{match['id']}"
+    match_data = storage_path.get(m_id)
+    winner_side = get_match_winner_side(match_data)
+    l_score = match_data.get("l") if match_data else None
+    v_score = match_data.get("v") if match_data else None
+    match_number = match.get("match_number")
+    label = f"M{match_number}" if match_number else ""
+    return (
+        "<div class='tree-match-card'>"
+        f"<div class='tree-match-label'>{escape(label)}</div>"
+        f"{render_tree_team(match['L_team'], l_score, 'L', winner_side)}"
+        f"{render_tree_team(match['V_team'], v_score, 'V', winner_side)}"
+        "</div>"
+    )
+
+def UI_arbol_bracket(bracket_dict, storage_path):
+    rounds = [
+        ("R32", "Dieciseisavos"),
+        ("R16", "Octavos"),
+        ("QF", "Cuartos"),
+        ("SF", "Semifinales"),
+        ("Final", "Final"),
+    ]
+    headers = "".join(f"<div class='tree-round-title'>{escape(round_name)}</div>" for _, round_name in rounds)
+    match_cards = []
+    for round_index, (round_key, _) in enumerate(rounds):
+        row_span = 2 ** round_index
+        for match_index, match in enumerate(bracket_dict[round_key]):
+            row_start = match_index * row_span + 1
+            match_cards.append(
+                "<div class='tree-match' "
+                f"style='grid-column:{round_index + 1}; grid-row:{row_start} / span {row_span};'>"
+                f"{render_tree_match(round_key, match, storage_path)}"
+                "</div>"
+            )
+
+    third_place = render_tree_match("Third", bracket_dict["Third"][0], storage_path)
+    champion = bracket_dict.get("Campeon", "Por definir")
+    champion_html = (
+        "<div class='tree-champion'>"
+        "<div class='tree-champion-label'>Campeón</div>"
+        f"<div class='tree-champion-team'><span>{escape(flag_for_team(champion))}</span>{escape(champion)}</div>"
+        "</div>"
+    )
+
+    st.markdown(
+        f"""
+        <style>
+            .bracket-tree-wrap {{
+                overflow-x: auto;
+                padding: 0.25rem 0 1rem;
+            }}
+            .bracket-tree {{
+                min-width: 1060px;
+                color: #172033;
+            }}
+            .tree-header {{
+                display: grid;
+                grid-template-columns: repeat(5, minmax(190px, 1fr));
+                gap: 1rem;
+                margin-bottom: 0.75rem;
+            }}
+            .tree-round-title {{
+                font-size: 0.82rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0;
+                color: #4a5568;
+            }}
+            .tree-grid {{
+                display: grid;
+                grid-template-columns: repeat(5, minmax(190px, 1fr));
+                grid-template-rows: repeat(16, minmax(58px, auto));
+                column-gap: 1rem;
+                row-gap: 0.45rem;
+                align-items: stretch;
+            }}
+            .tree-match {{
+                position: relative;
+                display: flex;
+                align-items: center;
+            }}
+            .tree-match:not(:last-child)::after {{
+                content: "";
+                position: absolute;
+                right: -1rem;
+                top: 50%;
+                width: 1rem;
+                border-top: 2px solid #b8c3d8;
+            }}
+            .tree-match-card {{
+                width: 100%;
+                border: 1px solid #d5deed;
+                border-left: 4px solid #2f80ed;
+                background: #ffffff;
+                border-radius: 8px;
+                box-shadow: 0 1px 4px rgba(25, 36, 55, 0.08);
+                padding: 0.45rem;
+            }}
+            .tree-match-label {{
+                margin-bottom: 0.25rem;
+                font-size: 0.72rem;
+                font-weight: 700;
+                color: #64748b;
+            }}
+            .tree-team {{
+                display: grid;
+                grid-template-columns: 1.8rem minmax(0, 1fr) auto;
+                align-items: center;
+                min-height: 2rem;
+                gap: 0.35rem;
+                border-radius: 6px;
+                padding: 0.25rem 0.35rem;
+                font-size: 0.9rem;
+                line-height: 1.1;
+            }}
+            .tree-team + .tree-team {{
+                margin-top: 0.2rem;
+            }}
+            .tree-team.winner {{
+                background: #e9f7ef;
+                color: #0f5c3a;
+                font-weight: 700;
+            }}
+            .tree-team.pending {{
+                color: #7a8496;
+                background: #f7f9fc;
+                font-style: italic;
+            }}
+            .tree-flag {{
+                font-size: 1.2rem;
+                text-align: center;
+            }}
+            .tree-name {{
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }}
+            .tree-score {{
+                min-width: 1.4rem;
+                text-align: center;
+                border-radius: 999px;
+                background: #eef2f7;
+                color: #1f2937;
+                font-weight: 700;
+                padding: 0.1rem 0.35rem;
+            }}
+            .tree-extras {{
+                display: grid;
+                grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr);
+                gap: 1rem;
+                margin-top: 1rem;
+            }}
+            .tree-champion {{
+                border: 1px solid #d8c47a;
+                border-left: 4px solid #d9a441;
+                border-radius: 8px;
+                background: #fff9e8;
+                padding: 0.7rem;
+            }}
+            .tree-champion-label {{
+                font-size: 0.72rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                color: #7a5b14;
+                margin-bottom: 0.35rem;
+            }}
+            .tree-champion-team {{
+                display: flex;
+                gap: 0.5rem;
+                align-items: center;
+                font-weight: 800;
+                color: #382b0a;
+            }}
+        </style>
+        <div class="bracket-tree-wrap">
+            <div class="bracket-tree">
+                <div class="tree-header">{headers}</div>
+                <div class="tree-grid">{''.join(match_cards)}</div>
+                <div class="tree-extras">
+                    {champion_html}
+                    <div>{third_place}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False):
+    view_mode = st.radio(
+        "Vista del bracket:",
+        ["Partidos", "Árbol con banderas"],
+        horizontal=True,
+        key=f"{key_prefix}_bracket_view",
+    )
+    if view_mode == "Árbol con banderas":
+        UI_arbol_bracket(bracket_dict, storage_path)
+        return
+
     rondas = [
         ("R32", "Dieciseisavos de Final"), 
         ("R16", "Octavos de Final"), 
