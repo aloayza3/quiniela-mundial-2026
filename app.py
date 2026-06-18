@@ -790,6 +790,7 @@ def build_official_r32(official_r32):
         match = official_r32.get(m_id, {})
         r32.append({
             "id": i,
+            "match_number": 73 + i,
             "L_team": match.get("L_team", f"Por definir (M{73 + i}A)"),
             "V_team": match.get("V_team", f"Por definir (M{73 + i}B)")
         })
@@ -813,12 +814,34 @@ def resolve_real_bracket(real_obj):
 
     r_tables, _, df_r_thirds = get_all_group_tables(real_obj.get("group_results", {}))
     return resolve_full_bracket(r_tables, df_r_thirds, real_obj.get("ko_results", {}))
+
+def resolve_real_bracket_for_display(real_obj):
+    if official_bracket_is_ready(real_obj.get("official_r32", {})):
+        return resolve_official_bracket(real_obj.get("official_r32", {}), real_obj.get("ko_results", {}))
+
+    r_tables, _, df_r_thirds = get_all_group_tables(real_obj.get("group_results", {}))
+    return resolve_full_bracket(
+        r_tables,
+        df_r_thirds,
+        real_obj.get("ko_results", {}),
+        require_complete_groups=False,
+        third_place_mode="provisional",
+    )
 	
-def resolve_full_bracket_from_slots(clasificados, df_thirds, ko_data):
-    if not df_thirds.empty and "Qualified" in df_thirds.columns:
-        mejores_8_terceros = df_thirds[df_thirds["Qualified"]].head(8).to_dict('records')
-    else:
-        mejores_8_terceros = df_thirds.head(8).to_dict('records') if not df_thirds.empty else []
+def select_third_place_qualifiers(df_thirds, third_place_mode):
+    if df_thirds.empty:
+        return []
+    if third_place_mode == "qualified" and "Qualified" in df_thirds.columns:
+        return df_thirds[df_thirds["Qualified"]].head(8).to_dict('records')
+    if third_place_mode == "provisional":
+        provisional_thirds = df_thirds
+        if "PJ" in provisional_thirds.columns:
+            provisional_thirds = provisional_thirds[provisional_thirds["PJ"] > 0]
+        return provisional_thirds.head(8).to_dict('records')
+    return df_thirds.head(8).to_dict('records')
+
+def resolve_full_bracket_from_slots(clasificados, df_thirds, ko_data, third_place_mode="qualified"):
+    mejores_8_terceros = select_third_place_qualifiers(df_thirds, third_place_mode)
 
     # Annex C maps each possible set of eight best third-placed groups to R32 slots.
     asignaciones_terceros = {}
@@ -859,18 +882,19 @@ def resolve_full_bracket_from_slots(clasificados, df_thirds, ko_data):
         ("1K", "3rd_from_1K"),     # id 14 (M87)
         ("2D", "2G")               # id 15 (M88)
     ]
-    r32 = [{"id": i, "L_team": get_team(l), "V_team": get_team(v)} for i, (l, v) in enumerate(slots_r32)]
+    r32 = [{"id": i, "match_number": 73 + i, "L_team": get_team(l), "V_team": get_team(v)} for i, (l, v) in enumerate(slots_r32)]
     return resolve_bracket_from_r32(r32, ko_data)
 
-def resolve_full_bracket(group_tables, df_thirds, ko_data):
+def resolve_full_bracket(group_tables, df_thirds, ko_data, require_complete_groups=True, third_place_mode="qualified"):
     clasificados = {}
     for g, tabla in group_tables.items():
         complete = "PJ" in tabla.columns and int(tabla["PJ"].sum()) == len(PARTIDOS_GRUPOS[g]) * 2
-        if len(tabla) >= 2 and complete:
+        has_results = "PJ" in tabla.columns and int(tabla["PJ"].sum()) > 0
+        if len(tabla) >= 2 and (complete or (not require_complete_groups and has_results)):
             clasificados[f"1{g[-1]}"] = tabla.iloc[0]["Equipo"]
             clasificados[f"2{g[-1]}"] = tabla.iloc[1]["Equipo"]
 
-    return resolve_full_bracket_from_slots(clasificados, df_thirds, ko_data)
+    return resolve_full_bracket_from_slots(clasificados, df_thirds, ko_data, third_place_mode=third_place_mode)
     
 # --- INTERFAZ ---
 st.set_page_config(page_title="Quiniela Pro Mundial 2026", layout="wide")
@@ -939,6 +963,7 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
                 m_id = f"{r_key}_{match['id']}"
                 has_pick = m_id in storage_path
                 cur = storage_path.get(m_id, {"l": 0, "v": 0, "avanza": "L"})
+                match_number = match.get("match_number")
                 
                 bloqueado = (
                     any(f in match["L_team"] for f in ["Por definir", "Mejor", "Esperando"])
@@ -946,7 +971,8 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
                     or read_only
                 )
                 
-                c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 1, 1, 3, 2])
+                c0, c1, c2, c3, c4, c5, c6 = st.columns([0.9, 3, 1, 1, 1, 3, 2])
+                c0.write(f"**M{match_number}**" if match_number else "")
                 c1.write(f"**{match['L_team']}**")
                 l_in = c2.number_input("", 0, 15, cur["l"], key=f"{key_prefix}_l_{m_id}", disabled=bloqueado, label_visibility="collapsed")
                 c3.write("vs")
@@ -1353,11 +1379,12 @@ with t_real:
         st.dataframe(df_r_thirds[["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]], hide_index=True)
     else:
         st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
-        real_bracket = resolve_real_bracket(data["real_results"])
         if official_bracket_is_ready(data["real_results"].get("official_r32", {})):
+            real_bracket = resolve_real_bracket_for_display(data["real_results"])
             st.caption("Usando el bracket oficial R32 cargado por el administrador.")
         else:
-            st.caption("Bracket provisional calculado desde resultados de grupos hasta que el administrador cargue el bracket oficial R32.")
+            real_bracket = resolve_real_bracket_for_display(data["real_results"])
+            st.caption("Bracket oficial provisional calculado con las posiciones actuales de grupos. Solo usa grupos que ya tienen al menos un resultado; los cruces de terceros siguen la tabla Annex C cuando hay ocho terceros provisionales.")
         st.success(f"🏆 CAMPEÓN REAL ACTUAL: {real_bracket['Campeon']}")
         UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True)
 
