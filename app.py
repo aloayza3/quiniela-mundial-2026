@@ -812,18 +812,19 @@ def get_loser(match_data, team_l, team_v):
 def get_all_teams():
     return [team for teams in GRUPOS_EQUIPOS.values() for team in teams]
 
+R16_SLOTS = [(1, 4), (0, 2), (3, 5), (6, 7), (10, 11), (8, 9), (13, 15), (12, 14)]
+QF_SLOTS = [(0, 1), (4, 5), (2, 3), (6, 7)]
+SF_SLOTS = [(0, 1), (2, 3)]
+
 def resolve_bracket_from_r32(r32, ko_data):
     # --- R16: OCTAVOS (M89 al M96) ---
-    r16_slots = [(1, 4), (0, 2), (3, 5), (6, 7), (10, 11), (8, 9), (13, 15), (12, 14)]
-    r16 = [{"id": i, "match_number": 89 + i, "L_team": get_winner(ko_data.get(f"R32_{l}"), r32[l]["L_team"], r32[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R32_{v}"), r32[v]["L_team"], r32[v]["V_team"])} for i, (l, v) in enumerate(r16_slots)]
+    r16 = [{"id": i, "match_number": 89 + i, "L_team": get_winner(ko_data.get(f"R32_{l}"), r32[l]["L_team"], r32[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R32_{v}"), r32[v]["L_team"], r32[v]["V_team"])} for i, (l, v) in enumerate(R16_SLOTS)]
     
     # --- QF: CUARTOS (M97 al M100) ---
-    qf_slots = [(0, 1), (4, 5), (2, 3), (6, 7)]
-    qf = [{"id": i, "match_number": 97 + i, "L_team": get_winner(ko_data.get(f"R16_{l}"), r16[l]["L_team"], r16[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R16_{v}"), r16[v]["L_team"], r16[v]["V_team"])} for i, (l, v) in enumerate(qf_slots)]
+    qf = [{"id": i, "match_number": 97 + i, "L_team": get_winner(ko_data.get(f"R16_{l}"), r16[l]["L_team"], r16[l]["V_team"]), "V_team": get_winner(ko_data.get(f"R16_{v}"), r16[v]["L_team"], r16[v]["V_team"])} for i, (l, v) in enumerate(QF_SLOTS)]
     
     # --- SF: SEMIFINALES (M101 y M102) ---
-    sf_slots = [(0, 1), (2, 3)]
-    sf = [{"id": i, "match_number": 101 + i, "L_team": get_winner(ko_data.get(f"QF_{l}"), qf[l]["L_team"], qf[l]["V_team"]), "V_team": get_winner(ko_data.get(f"QF_{v}"), qf[v]["L_team"], qf[v]["V_team"])} for i, (l, v) in enumerate(sf_slots)]
+    sf = [{"id": i, "match_number": 101 + i, "L_team": get_winner(ko_data.get(f"QF_{l}"), qf[l]["L_team"], qf[l]["V_team"]), "V_team": get_winner(ko_data.get(f"QF_{v}"), qf[v]["L_team"], qf[v]["V_team"])} for i, (l, v) in enumerate(SF_SLOTS)]
     
     # --- TERCER PUESTO (M103) ---
     third = [{"id": 0, "match_number": 103, "L_team": get_loser(ko_data.get(f"SF_0"), sf[0]["L_team"], sf[0]["V_team"]), "V_team": get_loser(ko_data.get(f"SF_1"), sf[1]["L_team"], sf[1]["V_team"])}]
@@ -1045,6 +1046,38 @@ def render_tree_match(round_key, match, storage_path):
         "</div>"
     )
 
+def get_tree_r32_leaf_order(round_key="Final", match_id=0):
+    if round_key == "R32":
+        return [match_id]
+    if round_key == "R16":
+        return [r32_id for r32_id in R16_SLOTS[match_id]]
+    if round_key == "QF":
+        return [
+            r32_id
+            for r16_id in QF_SLOTS[match_id]
+            for r32_id in get_tree_r32_leaf_order("R16", r16_id)
+        ]
+    if round_key == "SF":
+        return [
+            r32_id
+            for qf_id in SF_SLOTS[match_id]
+            for r32_id in get_tree_r32_leaf_order("QF", qf_id)
+        ]
+    if round_key == "Final":
+        return [
+            r32_id
+            for sf_id in (0, 1)
+            for r32_id in get_tree_r32_leaf_order("SF", sf_id)
+        ]
+    return []
+
+def get_tree_match_position(round_key, match_id, r32_row_by_id):
+    leaf_ids = get_tree_r32_leaf_order(round_key, match_id)
+    rows = [r32_row_by_id[leaf_id] for leaf_id in leaf_ids]
+    row_start = min(rows)
+    row_span = max(rows) - row_start + 1
+    return row_start, row_span
+
 def UI_arbol_bracket(bracket_dict, storage_path):
     rounds = [
         ("R32", "Dieciseisavos"),
@@ -1054,13 +1087,18 @@ def UI_arbol_bracket(bracket_dict, storage_path):
         ("Final", "Final"),
     ]
     headers = "".join(f"<div class='tree-round-title'>{escape(round_name)}</div>" for _, round_name in rounds)
+    r32_leaf_order = get_tree_r32_leaf_order()
+    r32_row_by_id = {match_id: row_index + 1 for row_index, match_id in enumerate(r32_leaf_order)}
     match_cards = []
     for round_index, (round_key, _) in enumerate(rounds):
-        row_span = 2 ** round_index
-        for match_index, match in enumerate(bracket_dict[round_key]):
-            row_start = match_index * row_span + 1
+        matches = bracket_dict[round_key]
+        if round_key == "R32":
+            matches = sorted(matches, key=lambda match: r32_row_by_id[match["id"]])
+        for match in matches:
+            row_start, row_span = get_tree_match_position(round_key, match["id"], r32_row_by_id)
+            connect_class = "" if round_key == "Final" else " tree-match-connect"
             match_cards.append(
-                "<div class='tree-match' "
+                f"<div class='tree-match{connect_class}' "
                 f"style='grid-column:{round_index + 1}; grid-row:{row_start} / span {row_span};'>"
                 f"{render_tree_match(round_key, match, storage_path)}"
                 "</div>"
@@ -1112,7 +1150,7 @@ def UI_arbol_bracket(bracket_dict, storage_path):
                 display: flex;
                 align-items: center;
             }}
-            .tree-match:not(:last-child)::after {{
+            .tree-match-connect::after {{
                 content: "";
                 position: absolute;
                 right: -1rem;
