@@ -942,6 +942,30 @@ def get_all_teams():
 R16_SLOTS = [(1, 4), (0, 2), (3, 5), (6, 7), (10, 11), (8, 9), (13, 15), (12, 14)]
 QF_SLOTS = [(0, 1), (4, 5), (2, 3), (6, 7)]
 SF_SLOTS = [(0, 1), (2, 3)]
+R32_SLOT_PAIRS = [
+    ("2A", "2B"),              # id 0 (M73)
+    ("1E", "3rd_from_1E"),     # id 1 (M74)
+    ("1F", "2C"),              # id 2 (M75)
+    ("1C", "2F"),              # id 3 (M76)
+    ("1I", "3rd_from_1I"),     # id 4 (M77)
+    ("2E", "2I"),              # id 5 (M78)
+    ("1A", "3rd_from_1A"),     # id 6 (M79)
+    ("1L", "3rd_from_1L"),     # id 7 (M80)
+    ("1D", "3rd_from_1D"),     # id 8 (M81)
+    ("1G", "3rd_from_1G"),     # id 9 (M82)
+    ("2K", "2L"),              # id 10 (M83)
+    ("1H", "2J"),              # id 11 (M84)
+    ("1B", "3rd_from_1B"),     # id 12 (M85)
+    ("1J", "2H"),              # id 13 (M86)
+    ("1K", "3rd_from_1K"),     # id 14 (M87)
+    ("2D", "2G")               # id 15 (M88)
+]
+R32_MATCH_BY_SLOT = {
+    slot: 73 + idx
+    for idx, pair in enumerate(R32_SLOT_PAIRS)
+    for slot in pair
+    if slot.startswith("1") or slot.startswith("2")
+}
 
 def resolve_bracket_from_r32(r32, ko_data):
     # --- R16: OCTAVOS (M89 al M96) ---
@@ -1044,25 +1068,7 @@ def resolve_full_bracket_from_slots(clasificados, df_thirds, ko_data, third_plac
         return slot
 
     # --- R32: DIECISEISAVOS (M73 al M88) ---
-    slots_r32 = [
-        ("2A", "2B"),              # id 0 (M73)
-        ("1E", "3rd_from_1E"),     # id 1 (M74)
-        ("1F", "2C"),              # id 2 (M75)
-        ("1C", "2F"),              # id 3 (M76)
-        ("1I", "3rd_from_1I"),     # id 4 (M77)
-        ("2E", "2I"),              # id 5 (M78)
-        ("1A", "3rd_from_1A"),     # id 6 (M79)
-        ("1L", "3rd_from_1L"),     # id 7 (M80)
-        ("1D", "3rd_from_1D"),     # id 8 (M81)
-        ("1G", "3rd_from_1G"),     # id 9 (M82)
-        ("2K", "2L"),              # id 10 (M83)
-        ("1H", "2J"),              # id 11 (M84)
-        ("1B", "3rd_from_1B"),     # id 12 (M85)
-        ("1J", "2H"),              # id 13 (M86)
-        ("1K", "3rd_from_1K"),     # id 14 (M87)
-        ("2D", "2G")               # id 15 (M88)
-    ]
-    r32 = [{"id": i, "match_number": 73 + i, "L_team": get_team(l), "V_team": get_team(v)} for i, (l, v) in enumerate(slots_r32)]
+    r32 = [{"id": i, "match_number": 73 + i, "L_team": get_team(l), "V_team": get_team(v)} for i, (l, v) in enumerate(R32_SLOT_PAIRS)]
     return resolve_bracket_from_r32(r32, ko_data)
 
 def resolve_full_bracket(group_tables, df_thirds, ko_data, require_complete_groups=True, third_place_mode="qualified"):
@@ -1075,6 +1081,235 @@ def resolve_full_bracket(group_tables, df_thirds, ko_data, require_complete_grou
             clasificados[f"2{g[-1]}"] = tabla.iloc[1]["Equipo"]
 
     return resolve_full_bracket_from_slots(clasificados, df_thirds, ko_data, third_place_mode=third_place_mode)
+
+def projected_result_options(local, visitante):
+    return [
+        (local, visitante, {"l": 1, "v": 0, "l_yellow": 0, "l_red": 0, "v_yellow": 0, "v_red": 0}),
+        (local, visitante, {"l": 0, "v": 0, "l_yellow": 0, "l_red": 0, "v_yellow": 0, "v_red": 0}),
+        (local, visitante, {"l": 0, "v": 1, "l_yellow": 0, "l_red": 0, "v_yellow": 0, "v_red": 0}),
+    ]
+
+def enumerate_group_position_sets(group_name, resultados_dict):
+    remaining_matches = [
+        (i, local, visitante)
+        for i, (local, visitante) in enumerate(PARTIDOS_GRUPOS[group_name])
+        if f"{group_name}_{i}" not in resultados_dict
+    ]
+    position_sets = {team: set() for team in GRUPOS_EQUIPOS[group_name]}
+
+    def visit(match_index, projected_results):
+        if match_index == len(remaining_matches):
+            table = get_all_group_tables(projected_results, use_fifa_tiebreakers=True)[0][group_name]
+            for idx, row in table.reset_index(drop=True).iterrows():
+                position_sets[row["Equipo"]].add(idx + 1)
+            return
+
+        i, local, visitante = remaining_matches[match_index]
+        match_id = f"{group_name}_{i}"
+        for _, _, result in projected_result_options(local, visitante):
+            projected_results[match_id] = result
+            visit(match_index + 1, projected_results)
+            projected_results.pop(match_id, None)
+
+    visit(0, dict(resultados_dict))
+    return position_sets
+
+def qualification_statuses_from_real_results(resultados_dict):
+    statuses = {}
+    for group_name in GRUPOS_EQUIPOS.keys():
+        group_letter = group_name[-1]
+        position_sets = enumerate_group_position_sets(group_name, resultados_dict)
+        for team, positions in position_sets.items():
+            if not positions:
+                continue
+
+            status = None
+            best_position = min(positions)
+            worst_position = max(positions)
+            locked_position = best_position if len(positions) == 1 else None
+
+            if locked_position in (1, 2):
+                slot = f"{locked_position}{group_letter}"
+                match_number = R32_MATCH_BY_SLOT.get(slot)
+                status = {
+                    "type": "locked_position",
+                    "label": f"{slot} confirmado",
+                    "table_label": f"Clasificado ({slot})",
+                    "bracket_label": f"{slot} confirmado" + (f" - M{match_number}" if match_number else ""),
+                    "slot": slot,
+                    "match_number": match_number,
+                }
+            elif worst_position <= 2:
+                status = {
+                    "type": "qualified",
+                    "label": "Clasificado",
+                    "table_label": "Clasificado",
+                    "bracket_label": "Clasificado",
+                    "slot": None,
+                    "match_number": None,
+                }
+            elif locked_position == 4:
+                status = {
+                    "type": "eliminated",
+                    "label": "Eliminado",
+                    "table_label": "Eliminado",
+                    "bracket_label": "Eliminado",
+                    "slot": None,
+                    "match_number": None,
+                }
+
+            if status:
+                statuses[team] = status
+    return statuses
+
+def status_for_team(team, team_statuses):
+    if team_is_pending(team):
+        return None
+    return (team_statuses or {}).get(team)
+
+def add_real_status_columns(table, team_statuses):
+    display_table = table.copy()
+    display_table["Estado"] = display_table["Equipo"].map(lambda team: (team_statuses.get(team) or {}).get("table_label", ""))
+    display_table["R32"] = display_table["Equipo"].map(lambda team: (team_statuses.get(team) or {}).get("bracket_label", ""))
+    return display_table
+
+def style_real_status_table(table):
+    def row_style(row):
+        status = row.get("Estado", "")
+        if "Eliminado" in status:
+            return ["background-color: #fde8e8; color: #7f1d1d;"] * len(row)
+        if "Clasificado" in status:
+            return ["background-color: #e9f7ef; color: #14532d; font-weight: 600;"] * len(row)
+        return [""] * len(row)
+
+    return table.style.apply(row_style, axis=1)
+
+def UI_real_status_summary(team_statuses):
+    locked = [
+        f"{team} ({status['bracket_label']})"
+        for team, status in team_statuses.items()
+        if status["type"] == "locked_position"
+    ]
+    eliminated = [
+        team
+        for team, status in team_statuses.items()
+        if status["type"] == "eliminated"
+    ]
+    if locked:
+        st.success("Posiciones confirmadas: " + ", ".join(locked))
+    if eliminated:
+        st.error("Eliminados: " + ", ".join(eliminated))
+
+def build_simulated_group_results(real_group_results):
+    simulated_results = dict(real_group_results)
+    for group_name, matches in PARTIDOS_GRUPOS.items():
+        for i, _ in enumerate(matches):
+            match_id = f"{group_name}_{i}"
+            if match_id in real_group_results:
+                continue
+            simulated_results[match_id] = {
+                "l": st.session_state.get(f"sim_l_{match_id}", 0),
+                "v": st.session_state.get(f"sim_v_{match_id}", 0),
+                "l_yellow": 0,
+                "l_red": 0,
+                "v_yellow": 0,
+                "v_red": 0,
+            }
+    return simulated_results
+
+def reset_simulation_inputs(real_group_results):
+    for group_name, matches in PARTIDOS_GRUPOS.items():
+        for i, _ in enumerate(matches):
+            match_id = f"{group_name}_{i}"
+            if match_id in real_group_results:
+                continue
+            st.session_state.pop(f"sim_l_{match_id}", None)
+            st.session_state.pop(f"sim_v_{match_id}", None)
+
+def UI_real_group_simulator(real_group_results):
+    st.subheader("🧪 Simulador de Clasificación")
+    pending_count = sum(
+        1
+        for group_name, matches in PARTIDOS_GRUPOS.items()
+        for i, _ in enumerate(matches)
+        if f"{group_name}_{i}" not in real_group_results
+    )
+    st.metric("Partidos pendientes simulables", pending_count)
+
+    if st.button("Reiniciar simulación", key="reset_real_group_simulation"):
+        reset_simulation_inputs(real_group_results)
+        st.rerun()
+
+    sim_input_tab, sim_table_tab, sim_bracket_tab = st.tabs(["Partidos", "Tablas", "Llave R32"])
+
+    with sim_input_tab:
+        for group_name, matches in PARTIDOS_GRUPOS.items():
+            finished_count = sum(1 for i, _ in enumerate(matches) if f"{group_name}_{i}" in real_group_results)
+            with st.expander(f"{group_name} ({finished_count}/{len(matches)} oficiales)", expanded=finished_count < len(matches)):
+                for i, (local, visitante) in enumerate(matches):
+                    match_id = f"{group_name}_{i}"
+                    official_result = real_group_results.get(match_id)
+                    if official_result:
+                        cur_l = official_result.get("l", 0)
+                        cur_v = official_result.get("v", 0)
+                        disabled = True
+                        status_text = "Oficial"
+                        l_key = f"sim_official_l_{match_id}"
+                        v_key = f"sim_official_v_{match_id}"
+                    else:
+                        cur_l = st.session_state.get(f"sim_l_{match_id}", 0)
+                        cur_v = st.session_state.get(f"sim_v_{match_id}", 0)
+                        disabled = False
+                        status_text = "Simulado"
+                        l_key = f"sim_l_{match_id}"
+                        v_key = f"sim_v_{match_id}"
+
+                    c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 0.7, 1, 3, 1.2])
+                    c1.write(local)
+                    c2.number_input(
+                        "",
+                        0,
+                        20,
+                        cur_l,
+                        key=l_key,
+                        disabled=disabled,
+                        label_visibility="collapsed",
+                    )
+                    c3.write("vs")
+                    c4.number_input(
+                        "",
+                        0,
+                        20,
+                        cur_v,
+                        key=v_key,
+                        disabled=disabled,
+                        label_visibility="collapsed",
+                    )
+                    c5.write(visitante)
+                    c6.caption(status_text)
+
+    simulated_results = build_simulated_group_results(real_group_results)
+    sim_tables, _, sim_thirds = get_all_group_tables(simulated_results, use_fifa_tiebreakers=True)
+    sim_statuses = qualification_statuses_from_real_results(simulated_results)
+
+    with sim_table_tab:
+        UI_real_status_summary(sim_statuses)
+        cx = st.columns(3)
+        for idx, group_name in enumerate(PARTIDOS_GRUPOS.keys()):
+            with cx[idx % 3]:
+                st.write(f"**{group_name}**")
+                sim_group_table = add_real_status_columns(sim_tables[group_name], sim_statuses)
+                st.dataframe(style_real_status_table(sim_group_table), hide_index=True)
+
+        st.subheader("🥉 Terceros Simulados")
+        third_columns = ["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]
+        if {"FairPlay", "Ranking FIFA"}.issubset(sim_thirds.columns):
+            third_columns = ["Grupo", "Equipo", "Pts", "GD", "GF", "FairPlay", "Ranking FIFA", "Avanza"]
+        st.dataframe(sim_thirds[third_columns], hide_index=True)
+
+    with sim_bracket_tab:
+        sim_bracket = resolve_full_bracket(sim_tables, sim_thirds, {}, require_complete_groups=True)
+        UI_arbol_bracket(sim_bracket, {}, team_statuses=sim_statuses)
     
 # --- INTERFAZ ---
 st.set_page_config(page_title="Quiniela Pro Mundial 2026", layout="wide")
@@ -1145,19 +1380,24 @@ def get_match_winner_side(match_data):
         return "V"
     return match_data.get("avanza", "L")
 
-def render_tree_team(team, score, side, winner_side):
+def render_tree_team(team, score, side, winner_side, team_statuses=None):
     pending_class = " pending" if team_is_pending(team) else ""
     winner_class = " winner" if winner_side == side else ""
+    status = status_for_team(team, team_statuses)
+    locked_class = " locked" if status and status["type"] == "locked_position" else ""
     score_html = "" if score is None else f"<span class='tree-score'>{score}</span>"
+    status_html = ""
+    if status and status["type"] == "locked_position":
+        status_html = f"<span class='tree-status'>{escape(status['bracket_label'])}</span>"
     return (
-        f"<div class='tree-team{winner_class}{pending_class}'>"
+        f"<div class='tree-team{winner_class}{pending_class}{locked_class}'>"
         f"<span class='tree-flag'>{escape(flag_for_team(team))}</span>"
-        f"<span class='tree-name'>{escape(team)}</span>"
+        f"<span class='tree-name'>{escape(team)}{status_html}</span>"
         f"{score_html}"
         "</div>"
     )
 
-def render_tree_match(round_key, match, storage_path):
+def render_tree_match(round_key, match, storage_path, team_statuses=None):
     m_id = f"{round_key}_{match['id']}"
     match_data = storage_path.get(m_id)
     winner_side = get_match_winner_side(match_data)
@@ -1168,8 +1408,8 @@ def render_tree_match(round_key, match, storage_path):
     return (
         "<div class='tree-match-card'>"
         f"<div class='tree-match-label'>{escape(label)}</div>"
-        f"{render_tree_team(match['L_team'], l_score, 'L', winner_side)}"
-        f"{render_tree_team(match['V_team'], v_score, 'V', winner_side)}"
+        f"{render_tree_team(match['L_team'], l_score, 'L', winner_side, team_statuses)}"
+        f"{render_tree_team(match['V_team'], v_score, 'V', winner_side, team_statuses)}"
         "</div>"
     )
 
@@ -1205,7 +1445,7 @@ def get_tree_match_position(round_key, match_id, r32_row_by_id):
     row_span = max(rows) - row_start + 1
     return row_start, row_span
 
-def UI_arbol_bracket(bracket_dict, storage_path):
+def UI_arbol_bracket(bracket_dict, storage_path, team_statuses=None):
     rounds = [
         ("R32", "Dieciseisavos"),
         ("R16", "Octavos"),
@@ -1227,11 +1467,11 @@ def UI_arbol_bracket(bracket_dict, storage_path):
             match_cards.append(
                 f"<div class='tree-match{connect_class}' "
                 f"style='grid-column:{round_index + 1}; grid-row:{row_start} / span {row_span};'>"
-                f"{render_tree_match(round_key, match, storage_path)}"
+                f"{render_tree_match(round_key, match, storage_path, team_statuses)}"
                 "</div>"
             )
 
-    third_place = render_tree_match("Third", bracket_dict["Third"][0], storage_path)
+    third_place = render_tree_match("Third", bracket_dict["Third"][0], storage_path, team_statuses)
     champion = bracket_dict.get("Campeon", "Por definir")
     champion_html = (
         "<div class='tree-champion'>"
@@ -1319,6 +1559,10 @@ def UI_arbol_bracket(bracket_dict, storage_path):
                 color: #0f5c3a;
                 font-weight: 700;
             }}
+            .tree-team.locked {{
+                outline: 2px solid #22c55e;
+                background: #ecfdf3;
+            }}
             .tree-team.pending {{
                 color: #7a8496;
                 background: #f7f9fc;
@@ -1332,6 +1576,13 @@ def UI_arbol_bracket(bracket_dict, storage_path):
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
+            }}
+            .tree-status {{
+                display: block;
+                margin-top: 0.12rem;
+                font-size: 0.68rem;
+                font-weight: 700;
+                color: #15803d;
             }}
             .tree-score {{
                 min-width: 1.4rem;
@@ -1384,7 +1635,7 @@ def UI_arbol_bracket(bracket_dict, storage_path):
         unsafe_allow_html=True,
     )
 
-def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False):
+def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False, team_statuses=None):
     view_mode = st.radio(
         "Vista del bracket:",
         ["Partidos", "Árbol con banderas"],
@@ -1392,7 +1643,7 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
         key=f"{key_prefix}_bracket_view",
     )
     if view_mode == "Árbol con banderas":
-        UI_arbol_bracket(bracket_dict, storage_path)
+        UI_arbol_bracket(bracket_dict, storage_path, team_statuses=team_statuses)
         return
 
     rondas = [
@@ -1420,10 +1671,16 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
                 c0, c1, c2, c3, c4, c5, c6 = st.columns([0.9, 3, 1, 1, 1, 3, 2])
                 c0.write(f"**M{match_number}**" if match_number else "")
                 c1.write(f"**{match['L_team']}**")
+                left_status = status_for_team(match["L_team"], team_statuses)
+                if left_status and left_status["type"] == "locked_position":
+                    c1.caption(left_status["bracket_label"])
                 l_in = c2.number_input("", 0, 15, cur["l"], key=f"{key_prefix}_l_{m_id}", disabled=bloqueado, label_visibility="collapsed")
                 c3.write("vs")
                 v_in = c4.number_input("", 0, 15, cur["v"], key=f"{key_prefix}_v_{m_id}", disabled=bloqueado, label_visibility="collapsed")
                 c5.write(f"**{match['V_team']}**")
+                right_status = status_for_team(match["V_team"], team_statuses)
+                if right_status and right_status["type"] == "locked_position":
+                    c5.caption(right_status["bracket_label"])
                 
                 if read_only:
                     if not has_pick:
@@ -1816,21 +2073,24 @@ with t_real:
 
     real_view = st.radio(
         "Visualizar datos reales:",
-        ["Partidos de Grupos", "Tablas de Posiciones", "Llave Eliminatoria"],
+        ["Partidos de Grupos", "Tablas de Posiciones", "Llave Eliminatoria", "Simulador"],
         horizontal=True,
         key="real_public_view",
     )
     r_tables, _, df_r_thirds = get_all_group_tables(data["real_results"]["group_results"], use_fifa_tiebreakers=True)
+    real_team_statuses = qualification_statuses_from_real_results(data["real_results"]["group_results"])
 
     if real_view == "Partidos de Grupos":
         UI_real_group_results_view(data["real_results"]["group_results"])
     elif real_view == "Tablas de Posiciones":
         st.subheader("📊 Tablas de Posiciones Reales de la FIFA")
+        UI_real_status_summary(real_team_statuses)
         cx2 = st.columns(3)
         for idx, g in enumerate(PARTIDOS_GRUPOS.keys()):
             with cx2[idx % 3]:
                 st.write(f"**{g}**")
-                st.dataframe(r_tables[g], hide_index=True)
+                real_group_table = add_real_status_columns(r_tables[g], real_team_statuses)
+                st.dataframe(style_real_status_table(real_group_table), hide_index=True)
 
         st.subheader("🥉 Tabla de Terceros por Marcadores")
         st.caption("La clasificación oficial de terceros puede depender de fair play y ranking FIFA; usa el bracket oficial R32 cargado por el administrador para la llave real.")
@@ -1838,8 +2098,9 @@ with t_real:
         if {"FairPlay", "Ranking FIFA"}.issubset(df_r_thirds.columns):
             third_columns = ["Grupo", "Equipo", "Pts", "GD", "GF", "FairPlay", "Ranking FIFA", "Avanza"]
         st.dataframe(df_r_thirds[third_columns], hide_index=True)
-    else:
+    elif real_view == "Llave Eliminatoria":
         st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
+        UI_real_status_summary(real_team_statuses)
         if official_bracket_is_ready(data["real_results"].get("official_r32", {})):
             real_bracket = resolve_real_bracket_for_display(data["real_results"])
             st.caption("Usando el bracket oficial R32 cargado por el administrador.")
@@ -1847,7 +2108,9 @@ with t_real:
             real_bracket = resolve_real_bracket_for_display(data["real_results"])
             st.caption("Bracket oficial provisional calculado con las posiciones actuales de grupos. Solo usa grupos que ya tienen al menos un resultado; los cruces de terceros siguen la tabla Annex C cuando hay ocho terceros provisionales.")
         st.success(f"🏆 CAMPEÓN REAL ACTUAL: {real_bracket['Campeon']}")
-        UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True)
+        UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True, team_statuses=real_team_statuses)
+    else:
+        UI_real_group_simulator(data["real_results"]["group_results"])
 
 # ================= TAB 4: POSICIONES Y REGLAS =================
 with t_puntos:
