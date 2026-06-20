@@ -93,6 +93,59 @@ TEAM_FLAGS = {
     "Panamá": "🇵🇦",
 }
 
+FIFA_RANKING_LAST_UPDATE = "2026-06-11"
+FIFA_RANKING_BY_TEAM = {
+    "México": 14,
+    "Sudáfrica": 60,
+    "Corea del Sur": 25,
+    "Chequia": 40,
+    "Canadá": 30,
+    "Bosnia y Herzegovina": 64,
+    "Catar": 56,
+    "Suiza": 19,
+    "Brasil": 6,
+    "Marruecos": 7,
+    "Haití": 83,
+    "Escocia": 42,
+    "Estados Unidos": 17,
+    "Paraguay": 41,
+    "Australia": 27,
+    "Turquía": 22,
+    "Alemania": 10,
+    "Curazao": 82,
+    "Costa de Marfil": 33,
+    "Ecuador": 23,
+    "Países Bajos": 8,
+    "Japón": 18,
+    "Suecia": 38,
+    "Túnez": 45,
+    "Bélgica": 9,
+    "Egipto": 29,
+    "Irán": 20,
+    "Nueva Zelanda": 85,
+    "España": 2,
+    "Cabo Verde": 67,
+    "Arabia Saudita": 61,
+    "Uruguay": 16,
+    "Francia": 3,
+    "Senegal": 15,
+    "Irak": 57,
+    "Noruega": 31,
+    "Argentina": 1,
+    "Argelia": 28,
+    "Austria": 24,
+    "Jordania": 63,
+    "Portugal": 5,
+    "RD Congo": 46,
+    "Uzbekistán": 50,
+    "Colombia": 13,
+    "Inglaterra": 4,
+    "Croacia": 11,
+    "Ghana": 73,
+    "Panamá": 34,
+}
+TEAM_CONDUCT_SCORES = {team: 0 for teams in GRUPOS_EQUIPOS.values() for team in teams}
+
 ANNEX_C_THIRD_COLUMNS = ["1A", "1B", "1D", "1E", "1G", "1I", "1K", "1L"]
 ANNEX_C_ROWS = """
 1:EJIFHGLK
@@ -712,7 +765,13 @@ def h2h_stats(teams, group_name, resultados_dict):
         stats[team]["GD"] = stats[team]["GF"] - stats[team]["GC"]
     return stats
 
-def rank_equal_points_teams(teams, group_name, resultados_dict, overall_stats, team_order):
+def team_conduct_score(team):
+    return TEAM_CONDUCT_SCORES.get(team, 0)
+
+def fifa_ranking_position(team):
+    return FIFA_RANKING_BY_TEAM.get(team, 999)
+
+def rank_equal_points_teams(teams, group_name, resultados_dict, overall_stats, team_order, use_fifa_tiebreakers=False):
     if len(teams) <= 1:
         return teams
 
@@ -732,31 +791,52 @@ def rank_equal_points_teams(teams, group_name, resultados_dict, overall_stats, t
         for _, tied_teams in h2h_groups:
             if len(tied_teams) == len(teams):
                 break
-            ranked.extend(rank_equal_points_teams(tied_teams, group_name, resultados_dict, overall_stats, team_order))
+            ranked.extend(rank_equal_points_teams(
+                tied_teams,
+                group_name,
+                resultados_dict,
+                overall_stats,
+                team_order,
+                use_fifa_tiebreakers=use_fifa_tiebreakers,
+            ))
         if len(ranked) == len(teams):
             return ranked
 
-    overall_sorted = sorted(
-        teams,
-        key=lambda team: (overall_stats[team]["GD"], overall_stats[team]["GF"], -team_order[team]),
-        reverse=True,
-    )
+    if use_fifa_tiebreakers:
+        overall_key = lambda team: (
+            overall_stats[team]["GD"],
+            overall_stats[team]["GF"],
+            team_conduct_score(team),
+            -fifa_ranking_position(team),
+            -team_order[team],
+        )
+    else:
+        overall_key = lambda team: (overall_stats[team]["GD"], overall_stats[team]["GF"], -team_order[team])
+
+    overall_sorted = sorted(teams, key=overall_key, reverse=True)
     return overall_sorted
 
-def rank_group_table(group_name, equipos, resultados_dict):
+def rank_group_table(group_name, equipos, resultados_dict, use_fifa_tiebreakers=False):
     team_order = {team: idx for idx, team in enumerate(GRUPOS_EQUIPOS[group_name])}
     teams = GRUPOS_EQUIPOS[group_name]
     teams_by_points = sorted(teams, key=lambda team: (equipos[team]["Pts"], -team_order[team]), reverse=True)
 
     ranked = []
     for _, tied_teams in split_by_equal_keys(teams_by_points, lambda team: equipos[team]["Pts"]):
-        ranked.extend(rank_equal_points_teams(tied_teams, group_name, resultados_dict, equipos, team_order))
+        ranked.extend(rank_equal_points_teams(
+            tied_teams,
+            group_name,
+            resultados_dict,
+            equipos,
+            team_order,
+            use_fifa_tiebreakers=use_fifa_tiebreakers,
+        ))
 
     rows = [{"Equipo": team, **equipos[team]} for team in ranked]
     return pd.DataFrame(rows, columns=["Equipo", "Pts", "PJ", "GF", "GC", "GD"])
 
 # --- PROCESAMIENTO DE MATRICES ---
-def get_all_group_tables(resultados_dict):
+def get_all_group_tables(resultados_dict, use_fifa_tiebreakers=False):
     tables = {}
     thirds = []
     for g in GRUPOS_EQUIPOS.keys():
@@ -774,7 +854,7 @@ def get_all_group_tables(resultados_dict):
                 elif l_score < v_score: equipos[vis]["Pts"] += 3
                 else: equipos[loc]["Pts"] += 1; equipos[vis]["Pts"] += 1
         for e in equipos: equipos[e]["GD"] = equipos[e]["GF"] - equipos[e]["GC"]
-        df = rank_group_table(g, equipos, resultados_dict).reset_index(drop=True)
+        df = rank_group_table(g, equipos, resultados_dict, use_fifa_tiebreakers=use_fifa_tiebreakers).reset_index(drop=True)
         tables[g] = df
         if len(df) >= 3:
             tercero = df.iloc[2].to_dict()
@@ -865,14 +945,14 @@ def resolve_real_bracket(real_obj):
     if official_bracket_is_ready(real_obj.get("official_r32", {})):
         return resolve_official_bracket(real_obj.get("official_r32", {}), real_obj.get("ko_results", {}))
 
-    r_tables, _, df_r_thirds = get_all_group_tables(real_obj.get("group_results", {}))
+    r_tables, _, df_r_thirds = get_all_group_tables(real_obj.get("group_results", {}), use_fifa_tiebreakers=True)
     return resolve_full_bracket(r_tables, df_r_thirds, real_obj.get("ko_results", {}))
 
 def resolve_real_bracket_for_display(real_obj):
     if official_bracket_is_ready(real_obj.get("official_r32", {})):
         return resolve_official_bracket(real_obj.get("official_r32", {}), real_obj.get("ko_results", {}))
 
-    r_tables, _, df_r_thirds = get_all_group_tables(real_obj.get("group_results", {}))
+    r_tables, _, df_r_thirds = get_all_group_tables(real_obj.get("group_results", {}), use_fifa_tiebreakers=True)
     return resolve_full_bracket(
         r_tables,
         df_r_thirds,
@@ -1681,7 +1761,7 @@ with t_real:
         horizontal=True,
         key="real_public_view",
     )
-    r_tables, _, df_r_thirds = get_all_group_tables(data["real_results"]["group_results"])
+    r_tables, _, df_r_thirds = get_all_group_tables(data["real_results"]["group_results"], use_fifa_tiebreakers=True)
 
     if real_view == "Partidos de Grupos":
         UI_real_group_results_view(data["real_results"]["group_results"])
