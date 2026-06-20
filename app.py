@@ -1208,8 +1208,8 @@ def build_simulated_group_results(real_group_results):
             if match_id in real_group_results:
                 continue
             simulated_results[match_id] = {
-                "l": st.session_state.get(f"sim_l_{match_id}", 0),
-                "v": st.session_state.get(f"sim_v_{match_id}", 0),
+                "l": st.session_state.get(f"sim_applied_l_{match_id}", 0),
+                "v": st.session_state.get(f"sim_applied_v_{match_id}", 0),
                 "l_yellow": 0,
                 "l_red": 0,
                 "v_yellow": 0,
@@ -1223,8 +1223,19 @@ def reset_simulation_inputs(real_group_results):
             match_id = f"{group_name}_{i}"
             if match_id in real_group_results:
                 continue
-            st.session_state.pop(f"sim_l_{match_id}", None)
-            st.session_state.pop(f"sim_v_{match_id}", None)
+            for prefix in ["sim_draft_l", "sim_draft_v", "sim_applied_l", "sim_applied_v"]:
+                st.session_state.pop(f"{prefix}_{match_id}", None)
+    st.session_state["real_group_simulation_applied"] = False
+
+def apply_simulation_inputs(real_group_results):
+    for group_name, matches in PARTIDOS_GRUPOS.items():
+        for i, _ in enumerate(matches):
+            match_id = f"{group_name}_{i}"
+            if match_id in real_group_results:
+                continue
+            st.session_state[f"sim_applied_l_{match_id}"] = st.session_state.get(f"sim_draft_l_{match_id}", 0)
+            st.session_state[f"sim_applied_v_{match_id}"] = st.session_state.get(f"sim_draft_v_{match_id}", 0)
+    st.session_state["real_group_simulation_applied"] = True
 
 def UI_real_group_simulator(real_group_results):
     st.subheader("🧪 Simulador de Clasificación")
@@ -1243,50 +1254,68 @@ def UI_real_group_simulator(real_group_results):
     sim_input_tab, sim_table_tab, sim_bracket_tab = st.tabs(["Partidos", "Tablas", "Llave R32"])
 
     with sim_input_tab:
-        for group_name, matches in PARTIDOS_GRUPOS.items():
-            finished_count = sum(1 for i, _ in enumerate(matches) if f"{group_name}_{i}" in real_group_results)
-            with st.expander(f"{group_name} ({finished_count}/{len(matches)} oficiales)", expanded=finished_count < len(matches)):
-                for i, (local, visitante) in enumerate(matches):
-                    match_id = f"{group_name}_{i}"
-                    official_result = real_group_results.get(match_id)
-                    if official_result:
-                        cur_l = official_result.get("l", 0)
-                        cur_v = official_result.get("v", 0)
-                        disabled = True
-                        status_text = "Oficial"
-                        l_key = f"sim_official_l_{match_id}"
-                        v_key = f"sim_official_v_{match_id}"
-                    else:
-                        cur_l = st.session_state.get(f"sim_l_{match_id}", 0)
-                        cur_v = st.session_state.get(f"sim_v_{match_id}", 0)
-                        disabled = False
-                        status_text = "Simulado"
-                        l_key = f"sim_l_{match_id}"
-                        v_key = f"sim_v_{match_id}"
+        with st.form("form_real_group_simulator"):
+            for group_name, matches in PARTIDOS_GRUPOS.items():
+                finished_count = sum(1 for i, _ in enumerate(matches) if f"{group_name}_{i}" in real_group_results)
+                with st.expander(f"{group_name} ({finished_count}/{len(matches)} oficiales)", expanded=finished_count < len(matches)):
+                    for i, (local, visitante) in enumerate(matches):
+                        match_id = f"{group_name}_{i}"
+                        official_result = real_group_results.get(match_id)
+                        if official_result:
+                            cur_l = official_result.get("l", 0)
+                            cur_v = official_result.get("v", 0)
+                            disabled = True
+                            status_text = "Oficial"
+                            l_key = f"sim_official_l_{match_id}"
+                            v_key = f"sim_official_v_{match_id}"
+                        else:
+                            cur_l = st.session_state.get(
+                                f"sim_draft_l_{match_id}",
+                                st.session_state.get(f"sim_applied_l_{match_id}", 0),
+                            )
+                            cur_v = st.session_state.get(
+                                f"sim_draft_v_{match_id}",
+                                st.session_state.get(f"sim_applied_v_{match_id}", 0),
+                            )
+                            disabled = False
+                            status_text = "Pendiente"
+                            l_key = f"sim_draft_l_{match_id}"
+                            v_key = f"sim_draft_v_{match_id}"
 
-                    c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 0.7, 1, 3, 1.2])
-                    c1.write(local)
-                    c2.number_input(
-                        "",
-                        0,
-                        20,
-                        cur_l,
-                        key=l_key,
-                        disabled=disabled,
-                        label_visibility="collapsed",
-                    )
-                    c3.write("vs")
-                    c4.number_input(
-                        "",
-                        0,
-                        20,
-                        cur_v,
-                        key=v_key,
-                        disabled=disabled,
-                        label_visibility="collapsed",
-                    )
-                    c5.write(visitante)
-                    c6.caption(status_text)
+                        c1, c2, c3, c4, c5, c6 = st.columns([3, 1, 0.7, 1, 3, 1.2])
+                        c1.write(local)
+                        c2.number_input(
+                            "",
+                            0,
+                            20,
+                            cur_l,
+                            key=l_key,
+                            disabled=disabled,
+                            label_visibility="collapsed",
+                        )
+                        c3.write("vs")
+                        c4.number_input(
+                            "",
+                            0,
+                            20,
+                            cur_v,
+                            key=v_key,
+                            disabled=disabled,
+                            label_visibility="collapsed",
+                        )
+                        c5.write(visitante)
+                        c6.caption(status_text)
+
+            if st.form_submit_button("Aplicar simulación"):
+                apply_simulation_inputs(real_group_results)
+                st.rerun()
+
+    if not st.session_state.get("real_group_simulation_applied", False):
+        with sim_table_tab:
+            st.info("Ingresa los resultados pendientes y presiona Aplicar simulación para recalcular tablas.")
+        with sim_bracket_tab:
+            st.info("La llave simulada aparecerá después de aplicar la simulación.")
+        return
 
     simulated_results = build_simulated_group_results(real_group_results)
     sim_tables, _, sim_thirds = get_all_group_tables(simulated_results, use_fifa_tiebreakers=True)
