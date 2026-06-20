@@ -144,7 +144,8 @@ FIFA_RANKING_BY_TEAM = {
     "Ghana": 73,
     "Panamá": 34,
 }
-TEAM_CONDUCT_SCORES = {team: 0 for teams in GRUPOS_EQUIPOS.values() for team in teams}
+YELLOW_CARD_CONDUCT_POINTS = -1
+RED_CARD_CONDUCT_POINTS = -4
 
 ANNEX_C_THIRD_COLUMNS = ["1A", "1B", "1D", "1E", "1G", "1I", "1K", "1L"]
 ANNEX_C_ROWS = """
@@ -765,13 +766,32 @@ def h2h_stats(teams, group_name, resultados_dict):
         stats[team]["GD"] = stats[team]["GF"] - stats[team]["GC"]
     return stats
 
-def team_conduct_score(team):
-    return TEAM_CONDUCT_SCORES.get(team, 0)
+def card_conduct_score(yellow_cards, red_cards):
+    return yellow_cards * YELLOW_CARD_CONDUCT_POINTS + red_cards * RED_CARD_CONDUCT_POINTS
+
+def group_conduct_scores(group_name, resultados_dict):
+    scores = {team: 0 for team in GRUPOS_EQUIPOS[group_name]}
+    for i, (loc, vis) in enumerate(PARTIDOS_GRUPOS[group_name]):
+        result = resultados_dict.get(f"{group_name}_{i}")
+        if not result:
+            continue
+
+        scores[loc] += card_conduct_score(result.get("l_yellow", 0), result.get("l_red", 0))
+        scores[vis] += card_conduct_score(result.get("v_yellow", 0), result.get("v_red", 0))
+    return scores
 
 def fifa_ranking_position(team):
     return FIFA_RANKING_BY_TEAM.get(team, 999)
 
-def rank_equal_points_teams(teams, group_name, resultados_dict, overall_stats, team_order, use_fifa_tiebreakers=False):
+def rank_equal_points_teams(
+    teams,
+    group_name,
+    resultados_dict,
+    overall_stats,
+    team_order,
+    use_fifa_tiebreakers=False,
+    conduct_scores=None,
+):
     if len(teams) <= 1:
         return teams
 
@@ -798,6 +818,7 @@ def rank_equal_points_teams(teams, group_name, resultados_dict, overall_stats, t
                 overall_stats,
                 team_order,
                 use_fifa_tiebreakers=use_fifa_tiebreakers,
+                conduct_scores=conduct_scores,
             ))
         if len(ranked) == len(teams):
             return ranked
@@ -806,7 +827,7 @@ def rank_equal_points_teams(teams, group_name, resultados_dict, overall_stats, t
         overall_key = lambda team: (
             overall_stats[team]["GD"],
             overall_stats[team]["GF"],
-            team_conduct_score(team),
+            (conduct_scores or {}).get(team, 0),
             -fifa_ranking_position(team),
             -team_order[team],
         )
@@ -816,7 +837,7 @@ def rank_equal_points_teams(teams, group_name, resultados_dict, overall_stats, t
     overall_sorted = sorted(teams, key=overall_key, reverse=True)
     return overall_sorted
 
-def rank_group_table(group_name, equipos, resultados_dict, use_fifa_tiebreakers=False):
+def rank_group_table(group_name, equipos, resultados_dict, use_fifa_tiebreakers=False, conduct_scores=None):
     team_order = {team: idx for idx, team in enumerate(GRUPOS_EQUIPOS[group_name])}
     teams = GRUPOS_EQUIPOS[group_name]
     teams_by_points = sorted(teams, key=lambda team: (equipos[team]["Pts"], -team_order[team]), reverse=True)
@@ -830,10 +851,21 @@ def rank_group_table(group_name, equipos, resultados_dict, use_fifa_tiebreakers=
             equipos,
             team_order,
             use_fifa_tiebreakers=use_fifa_tiebreakers,
+            conduct_scores=conduct_scores,
         ))
 
-    rows = [{"Equipo": team, **equipos[team]} for team in ranked]
-    return pd.DataFrame(rows, columns=["Equipo", "Pts", "PJ", "GF", "GC", "GD"])
+    rows = []
+    for team in ranked:
+        row = {"Equipo": team, **equipos[team]}
+        if use_fifa_tiebreakers:
+            row["FairPlay"] = (conduct_scores or {}).get(team, 0)
+            row["Ranking FIFA"] = fifa_ranking_position(team)
+        rows.append(row)
+
+    columns = ["Equipo", "Pts", "PJ", "GF", "GC", "GD"]
+    if use_fifa_tiebreakers:
+        columns.extend(["FairPlay", "Ranking FIFA"])
+    return pd.DataFrame(rows, columns=columns)
 
 # --- PROCESAMIENTO DE MATRICES ---
 def get_all_group_tables(resultados_dict, use_fifa_tiebreakers=False):
@@ -841,6 +873,7 @@ def get_all_group_tables(resultados_dict, use_fifa_tiebreakers=False):
     thirds = []
     for g in GRUPOS_EQUIPOS.keys():
         completed = group_is_complete(resultados_dict, g)
+        conduct_scores = group_conduct_scores(g, resultados_dict) if use_fifa_tiebreakers else None
         equipos = {e: {"Pts": 0, "PJ": 0, "GF": 0, "GC": 0, "GD": 0} for e in GRUPOS_EQUIPOS[g]}
         for i, (loc, vis) in enumerate(PARTIDOS_GRUPOS[g]):
             m_id = f"{g}_{i}"
@@ -854,7 +887,13 @@ def get_all_group_tables(resultados_dict, use_fifa_tiebreakers=False):
                 elif l_score < v_score: equipos[vis]["Pts"] += 3
                 else: equipos[loc]["Pts"] += 1; equipos[vis]["Pts"] += 1
         for e in equipos: equipos[e]["GD"] = equipos[e]["GF"] - equipos[e]["GC"]
-        df = rank_group_table(g, equipos, resultados_dict, use_fifa_tiebreakers=use_fifa_tiebreakers).reset_index(drop=True)
+        df = rank_group_table(
+            g,
+            equipos,
+            resultados_dict,
+            use_fifa_tiebreakers=use_fifa_tiebreakers,
+            conduct_scores=conduct_scores,
+        ).reset_index(drop=True)
         tables[g] = df
         if len(df) >= 3:
             tercero = df.iloc[2].to_dict()
@@ -862,7 +901,15 @@ def get_all_group_tables(resultados_dict, use_fifa_tiebreakers=False):
             tercero["Completo"] = completed
             thirds.append(tercero)
 	            
-    df_thirds = pd.DataFrame(thirds).sort_values(by=["Pts", "GD", "GF"], ascending=False, kind="mergesort").reset_index(drop=True)
+    df_thirds = pd.DataFrame(thirds)
+    if use_fifa_tiebreakers:
+        df_thirds = df_thirds.sort_values(
+            by=["Pts", "GD", "GF", "FairPlay", "Ranking FIFA"],
+            ascending=[False, False, False, False, True],
+            kind="mergesort",
+        ).reset_index(drop=True)
+    else:
+        df_thirds = df_thirds.sort_values(by=["Pts", "GD", "GF"], ascending=False, kind="mergesort").reset_index(drop=True)
     if not df_thirds.empty:
         df_thirds["Qualified"] = False
         complete_third_indexes = df_thirds[df_thirds["Completo"]].head(8).index
@@ -1497,10 +1544,13 @@ def build_group_match_rows(group_name, group_results):
         m_id = f"{group_name}_{i}"
         result = group_results.get(m_id)
         if result:
+            local_cards = f"{result.get('l_yellow', 0)}A / {result.get('l_red', 0)}R"
+            visitante_cards = f"{result.get('v_yellow', 0)}A / {result.get('v_red', 0)}R"
             rows.append({
                 "Grupo": group_name,
                 "Partido": f"{local} vs {visitante}",
                 "Resultado": f"{result['l']} - {result['v']}",
+                "Tarjetas": f"{local_cards} - {visitante_cards}",
                 "Estado": "Finalizado",
             })
         else:
@@ -1508,6 +1558,7 @@ def build_group_match_rows(group_name, group_results):
                 "Grupo": group_name,
                 "Partido": f"{local} vs {visitante}",
                 "Resultado": "Pendiente",
+                "Tarjetas": "Pendiente",
                 "Estado": "Pendiente",
             })
     return rows
@@ -1531,10 +1582,10 @@ def UI_real_group_results_view(group_results):
             rows = build_group_match_rows(group_name, group_results)
             finished_count = sum(1 for row in rows if row["Estado"] == "Finalizado")
             with st.expander(f"{group_name} ({finished_count}/{len(rows)} jugados)", expanded=finished_count > 0):
-                st.dataframe(pd.DataFrame(rows)[["Partido", "Resultado", "Estado"]], hide_index=True)
+                st.dataframe(pd.DataFrame(rows)[["Partido", "Resultado", "Tarjetas", "Estado"]], hide_index=True)
     else:
         rows = build_group_match_rows(selected_group, group_results)
-        st.dataframe(pd.DataFrame(rows)[["Partido", "Resultado", "Estado"]], hide_index=True)
+        st.dataframe(pd.DataFrame(rows)[["Partido", "Resultado", "Tarjetas", "Estado"]], hide_index=True)
 
 def UI_admin_group_results():
     st.subheader("Resultados Reales de Grupos")
@@ -1545,13 +1596,17 @@ def UI_admin_group_results():
         for i, (local, visitante) in enumerate(PARTIDOS_GRUPOS[g_adm]):
             m_id = f"{g_adm}_{i}"
             cur = group_results.get(m_id, {"l": 0, "v": 0})
-            c0, c1, c2, c3, c4, c5 = st.columns([1.3, 3, 1, 0.7, 1, 3])
+            c0, c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns([1.2, 2.4, 0.9, 0.9, 0.9, 0.5, 0.9, 0.9, 0.9, 2.4])
             c0.checkbox("Finalizado", value=m_id in group_results, key=f"r_played_{m_id}")
             c1.write(local)
-            c2.number_input("", 0, 20, cur["l"], key=f"r_l_{m_id}", label_visibility="collapsed")
-            c3.write("vs")
-            c4.number_input("", 0, 20, cur["v"], key=f"r_v_{m_id}", label_visibility="collapsed")
-            c5.write(visitante)
+            c2.number_input("Goles", 0, 20, cur.get("l", 0), key=f"r_l_{m_id}")
+            c3.number_input("Amar.", 0, 20, cur.get("l_yellow", 0), key=f"r_l_yellow_{m_id}")
+            c4.number_input("Rojas", 0, 20, cur.get("l_red", 0), key=f"r_l_red_{m_id}")
+            c5.write("vs")
+            c6.number_input("Goles", 0, 20, cur.get("v", 0), key=f"r_v_{m_id}")
+            c7.number_input("Amar.", 0, 20, cur.get("v_yellow", 0), key=f"r_v_yellow_{m_id}")
+            c8.number_input("Rojas", 0, 20, cur.get("v_red", 0), key=f"r_v_red_{m_id}")
+            c9.write(visitante)
 
         if st.form_submit_button("Publicar Resultados Reales de Grupo"):
             for i, _ in enumerate(PARTIDOS_GRUPOS[g_adm]):
@@ -1560,6 +1615,10 @@ def UI_admin_group_results():
                     group_results[m_id] = {
                         "l": st.session_state[f"r_l_{m_id}"],
                         "v": st.session_state[f"r_v_{m_id}"],
+                        "l_yellow": st.session_state[f"r_l_yellow_{m_id}"],
+                        "l_red": st.session_state[f"r_l_red_{m_id}"],
+                        "v_yellow": st.session_state[f"r_v_yellow_{m_id}"],
+                        "v_red": st.session_state[f"r_v_red_{m_id}"],
                     }
                 else:
                     group_results.pop(m_id, None)
@@ -1775,7 +1834,10 @@ with t_real:
 
         st.subheader("🥉 Tabla de Terceros por Marcadores")
         st.caption("La clasificación oficial de terceros puede depender de fair play y ranking FIFA; usa el bracket oficial R32 cargado por el administrador para la llave real.")
-        st.dataframe(df_r_thirds[["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]], hide_index=True)
+        third_columns = ["Grupo", "Equipo", "Pts", "GD", "GF", "Avanza"]
+        if {"FairPlay", "Ranking FIFA"}.issubset(df_r_thirds.columns):
+            third_columns = ["Grupo", "Equipo", "Pts", "GD", "GF", "FairPlay", "Ranking FIFA", "Avanza"]
+        st.dataframe(df_r_thirds[third_columns], hide_index=True)
     else:
         st.subheader("🌳 Llave de Eliminación Oficial Actualizada")
         if official_bracket_is_ready(data["real_results"].get("official_r32", {})):
