@@ -1964,6 +1964,160 @@ def UI_admin_participants(current_user):
                 st.success(f"Participante eliminado: {selected_participant}")
                 st.rerun()
 
+def score_tendency(result):
+    if result["l"] > result["v"]:
+        return "L"
+    if result["l"] < result["v"]:
+        return "V"
+    return "D"
+
+def classify_prediction_hit(prediction, real_result):
+    if not prediction or not real_result:
+        return None
+    if prediction["l"] == real_result["l"] and prediction["v"] == real_result["v"]:
+        return "exact"
+    if score_tendency(prediction) == score_tendency(real_result):
+        return "tendency"
+    return None
+
+def prediction_hit_label(hit_type):
+    if hit_type == "exact":
+        return "Marcador exacto"
+    if hit_type == "tendency":
+        return "Tendencia correcta"
+    return ""
+
+def prediction_hit_badge_html(hit_type):
+    if hit_type not in {"exact", "tendency"}:
+        return "<span class='hit-badge hit-none'>Sin acierto</span>"
+    return f"<span class='hit-badge hit-{hit_type}'>{prediction_hit_label(hit_type)}</span>"
+
+def render_prediction_hit_legend():
+    st.markdown(
+        """
+        <style>
+            .hit-badge {
+                display: inline-flex;
+                align-items: center;
+                min-height: 1.55rem;
+                border-radius: 999px;
+                padding: 0.18rem 0.55rem;
+                font-size: 0.78rem;
+                font-weight: 700;
+                line-height: 1;
+                white-space: nowrap;
+            }
+            .hit-exact {
+                background: #dcfce7;
+                color: #14532d;
+                border: 1px solid #86efac;
+            }
+            .hit-tendency {
+                background: #fef3c7;
+                color: #78350f;
+                border: 1px solid #fbbf24;
+            }
+            .hit-none {
+                background: #f1f5f9;
+                color: #64748b;
+                border: 1px solid #cbd5e1;
+            }
+            .prediction-match-card {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) auto auto auto minmax(0, 1fr) auto;
+                align-items: center;
+                gap: 0.55rem;
+                border: 1px solid #d8dee9;
+                border-left: 4px solid #cbd5e1;
+                border-radius: 8px;
+                padding: 0.55rem 0.65rem;
+                margin: 0.35rem 0;
+                background: #ffffff;
+            }
+            .prediction-match-card.prediction-hit-exact {
+                border-color: #86efac;
+                border-left-color: #16a34a;
+                background: #f0fdf4;
+            }
+            .prediction-match-card.prediction-hit-tendency {
+                border-color: #fbbf24;
+                border-left-color: #d97706;
+                background: #fffbeb;
+            }
+            .prediction-team-left {
+                text-align: right;
+                font-weight: 700;
+            }
+            .prediction-team-right {
+                text-align: left;
+                font-weight: 700;
+            }
+            .prediction-score {
+                min-width: 1.7rem;
+                border-radius: 6px;
+                background: rgba(15, 23, 42, 0.08);
+                padding: 0.18rem 0.35rem;
+                text-align: center;
+                font-weight: 800;
+            }
+            .prediction-vs {
+                color: #64748b;
+                font-size: 0.78rem;
+                font-weight: 700;
+                text-transform: uppercase;
+            }
+            @media (max-width: 700px) {
+                .prediction-match-card {
+                    grid-template-columns: minmax(0, 1fr) auto auto auto minmax(0, 1fr);
+                }
+                .prediction-match-card .hit-badge {
+                    grid-column: 1 / -1;
+                    justify-self: center;
+                }
+            }
+        </style>
+        <div style="display:flex; gap:0.45rem; flex-wrap:wrap; margin:0.25rem 0 0.7rem;">
+            <span class="hit-badge hit-exact">Marcador exacto</span>
+            <span class="hit-badge hit-tendency">Tendencia correcta</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def render_prediction_hit_badge(container, hit_type, real_result, has_prediction=True):
+    if not real_result:
+        container.caption("Pendiente")
+        return
+    if not has_prediction:
+        container.markdown("<span class='hit-badge hit-none'>Sin predicción</span>", unsafe_allow_html=True)
+        return
+    container.markdown(prediction_hit_badge_html(hit_type), unsafe_allow_html=True)
+
+def render_readonly_group_prediction_row(local, visitante, prediction, real_result):
+    hit_type = classify_prediction_hit(prediction, real_result)
+    row_class = f" prediction-hit-{hit_type}" if hit_type else ""
+    score_l = prediction["l"] if prediction else "-"
+    score_v = prediction["v"] if prediction else "-"
+    if not real_result:
+        badge = "<span class='hit-badge hit-none'>Pendiente</span>"
+    elif not prediction:
+        badge = "<span class='hit-badge hit-none'>Sin predicción</span>"
+    else:
+        badge = prediction_hit_badge_html(hit_type)
+    st.markdown(
+        f"""
+        <div class="prediction-match-card{row_class}">
+            <div class="prediction-team-left">{escape(local)}</div>
+            <div class="prediction-score">{score_l}</div>
+            <div class="prediction-vs">vs</div>
+            <div class="prediction-score">{score_v}</div>
+            <div class="prediction-team-right">{escape(visitante)}</div>
+            {badge}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def UI_prediccion_jugador(player_name, player_data, key_prefix):
     st.header(f"Predicción de {player_name}")
     st_p1, st_p2, st_p3 = st.tabs(["Fase de Grupos", "Fase Eliminatoria (Bracket)", "Bracket Oficial"])
@@ -1973,15 +2127,12 @@ def UI_prediccion_jugador(player_name, player_data, key_prefix):
     
     with st_p1:
         g_sel = st.selectbox("Selecciona un grupo:", list(PARTIDOS_GRUPOS.keys()), key=f"{key_prefix}_g_sel")
+        render_prediction_hit_legend()
         for i, (l, v) in enumerate(PARTIDOS_GRUPOS[g_sel]):
             m_id = f"{g_sel}_{i}"
-            cur = group_predictions.get(m_id, {"l": 0, "v": 0})
-            c1, c2, c3, c4, c5 = st.columns([3,1,1,1,3])
-            c1.write(l)
-            c2.number_input("", 0, 20, cur["l"], key=f"{key_prefix}_l_{m_id}", disabled=True, label_visibility="collapsed")
-            c3.write("vs")
-            c4.number_input("", 0, 20, cur["v"], key=f"{key_prefix}_v_{m_id}", disabled=True, label_visibility="collapsed")
-            c5.write(v)
+            prediction = group_predictions.get(m_id)
+            real_result = data["real_results"]["group_results"].get(m_id)
+            render_readonly_group_prediction_row(l, v, prediction, real_result)
 
         player_tables, _, player_thirds = get_all_group_tables(group_predictions)
         st.subheader("📋 Tablas según esta predicción:")
@@ -2013,14 +2164,19 @@ with t_pred:
     
     with st_p1:
         g_sel = st.selectbox("Selecciona un grupo para predecir:", list(PARTIDOS_GRUPOS.keys()), key="p_g_sel")
+        render_prediction_hit_legend()
         with st.form(f"form_user_{g_sel}"):
             for i, (l, v) in enumerate(PARTIDOS_GRUPOS[g_sel]):
                 m_id = f"{g_sel}_{i}"
-                cur = data["users"][user]["group_predictions"].get(m_id, {"l": 0, "v": 0})
-                c1, c2, c3, c4, c5 = st.columns([3,1,1,1,3])
+                saved_prediction = data["users"][user]["group_predictions"].get(m_id)
+                cur = saved_prediction or {"l": 0, "v": 0}
+                real_result = data["real_results"]["group_results"].get(m_id)
+                hit_type = classify_prediction_hit(saved_prediction, real_result)
+                c1, c2, c3, c4, c5, c6 = st.columns([3,1,1,1,3,2])
                 c1.write(l); l_in = c2.number_input("", 0, 20, cur["l"], key=f"u_l_{m_id}", disabled=predictions_locked, label_visibility="collapsed")
                 c3.write("vs"); v_in = c4.number_input("", 0, 20, cur["v"], key=f"u_v_{m_id}", disabled=predictions_locked, label_visibility="collapsed")
                 c5.write(v)
+                render_prediction_hit_badge(c6, hit_type, real_result, has_prediction=saved_prediction is not None)
             if st.form_submit_button("Guardar Resultados del Grupo", disabled=predictions_locked):
                 if predictions_are_locked():
                     st.error(prediction_lock_message())
@@ -2170,12 +2326,11 @@ with t_puntos:
         r_grp = real_obj.get("group_results", {})
         for m_id, r_res in r_grp.items():
             if m_id in u_grp:
-                pl, pv = u_grp[m_id]["l"], u_grp[m_id]["v"]
-                rl, rv = r_res["l"], r_res["v"]
-                if pl == rl and pv == rv:
+                hit_type = classify_prediction_hit(u_grp[m_id], r_res)
+                if hit_type == "exact":
                     stats["exactos"] += 1
                     stats["puntos"] += 3
-                elif (pl > pv and rl > rv) or (pl < pv and rl < rv) or (pl == pv and rl == rv):
+                elif hit_type == "tendency":
                     stats["tendencias"] += 1
                     stats["puntos"] += 1
         return stats
@@ -2227,12 +2382,11 @@ with t_puntos:
             if m_id not in u_ko or m_id not in r_ko:
                 continue
 
-            pl, pv = u_ko[m_id]["l"], u_ko[m_id]["v"]
-            rl, rv = r_ko[m_id]["l"], r_ko[m_id]["v"]
-            if pl == rl and pv == rv:
+            hit_type = classify_prediction_hit(u_ko[m_id], r_ko[m_id])
+            if hit_type == "exact":
                 stats["exactos"] += 1
                 stats["puntos"] += 3
-            elif (pl > pv and rl > rv) or (pl < pv and rl < rv) or (pl == pv and rl == rv):
+            elif hit_type == "tendency":
                 stats["tendencias"] += 1
                 stats["puntos"] += 1
         return stats
