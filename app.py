@@ -700,6 +700,17 @@ def load_data():
             normalize_user_data(user_data)
     return data
 
+def load_persisted_real_results():
+    if not os.path.exists(DATA_FILE):
+        return data.get("real_results", {})
+    with open(DATA_FILE, "r") as f:
+        persisted_data = json.load(f)
+    persisted_real_results = persisted_data.get("real_results", {})
+    persisted_real_results.setdefault("group_results", {})
+    persisted_real_results.setdefault("ko_results", {})
+    persisted_real_results.setdefault("official_r32", {})
+    return persisted_real_results
+
 def predictions_are_locked():
     return datetime.now(timezone.utc) >= PREDICTION_LOCK_DEADLINE.astimezone(timezone.utc)
 
@@ -2366,6 +2377,7 @@ with t_real:
 # ================= TAB 4: POSICIONES Y REGLAS =================
 with t_puntos:
     st.header("🏆 Tabla de Clasificación de la Quiniela")
+    real_results_for_scoring = load_persisted_real_results()
 
     def extraer_equipos(round_matches):
         eqs = set()
@@ -2500,16 +2512,16 @@ with t_puntos:
 	
     ranking_full = []
     ranking_official = []
-    real_full_bracket = resolve_real_bracket(data["real_results"])
-    official_ready = official_bracket_is_ready(data["real_results"].get("official_r32", {}))
+    real_full_bracket = resolve_real_bracket(real_results_for_scoring)
+    official_ready = official_bracket_is_ready(real_results_for_scoring.get("official_r32", {}))
     real_official_bracket = (
-        resolve_official_bracket(data["real_results"].get("official_r32", {}), data["real_results"].get("ko_results", {}))
+        resolve_official_bracket(real_results_for_scoring.get("official_r32", {}), real_results_for_scoring.get("ko_results", {}))
         if official_ready
         else None
     )
     for u_name, u_data in data["users"].items():
-        group_stats = calcular_aciertos_grupos(u_data, data["real_results"])
-        full_goal_stats = calcular_goles_torneo_completo(u_data, data["real_results"])
+        group_stats = calcular_aciertos_grupos(u_data, real_results_for_scoring)
+        full_goal_stats = calcular_goles_torneo_completo(u_data, real_results_for_scoring)
         user_full_bracket = resolve_user_full_bracket(u_data)
         full_stage_stats = calcular_aciertos_etapas_bracket(user_full_bracket, real_full_bracket)
         ranking_full.append({
@@ -2519,13 +2531,13 @@ with t_puntos:
             **full_stage_stats,
             "Goles Predichos/Reales": full_goal_stats["display"],
             "Diferencia Goles": full_goal_stats["difference"],
-            "Puntos Totales": calcular_puntos_totales(u_data, data["real_results"], group_stats),
+            "Puntos Totales": calcular_puntos_totales(u_data, real_results_for_scoring, group_stats),
         })
-        r32_stats = calcular_aciertos_r32_bracket_oficial(u_data, data["real_results"])
-        official_goal_stats = calcular_goles_bracket_oficial(u_data, data["real_results"])
+        r32_stats = calcular_aciertos_r32_bracket_oficial(u_data, real_results_for_scoring)
+        official_goal_stats = calcular_goles_bracket_oficial(u_data, real_results_for_scoring)
         official_stage_stats = {}
         if official_ready:
-            user_official_bracket = resolve_user_official_bracket(u_data, data["real_results"])
+            user_official_bracket = resolve_user_official_bracket(u_data, real_results_for_scoring)
             official_stage_stats = calcular_aciertos_etapas_bracket(user_official_bracket, real_official_bracket)
         ranking_official.append({
             "Jugador": u_name,
@@ -2534,7 +2546,7 @@ with t_puntos:
             **official_stage_stats,
             "Goles Predichos/Reales": official_goal_stats["display"],
             "Diferencia Goles": official_goal_stats["difference"],
-            "Puntos Bracket Oficial": calcular_puntos_bracket_oficial(u_data, data["real_results"]),
+            "Puntos Bracket Oficial": calcular_puntos_bracket_oficial(u_data, real_results_for_scoring),
         })
 	        
     st.subheader("Predicción 1: Torneo Completo")
@@ -2549,7 +2561,7 @@ with t_puntos:
         st.info("No hay datos de jugadores aún.")
 
     st.subheader("Predicción 2: Bracket Oficial")
-    if not official_bracket_is_ready(data["real_results"].get("official_r32", {})):
+    if not official_ready:
         st.info("El ranking del bracket oficial se activará cuando el administrador cargue el R32 oficial completo.")
     elif ranking_official:
         df_rank_official = pd.DataFrame(ranking_official).sort_values(
