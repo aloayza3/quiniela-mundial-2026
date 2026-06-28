@@ -1757,6 +1757,98 @@ def UI_fase_eliminatoria(bracket_dict, storage_path, key_prefix, read_only=False
                     save_data(data)
                     st.rerun() 
 
+def UI_admin_ko_results(bracket_dict, ko_results):
+    st.caption("Marca como finalizado solo el partido que quieres publicar. Los partidos sin marcar no se guardan como resultados oficiales.")
+    rondas = [
+        ("R32", "Dieciseisavos de Final"),
+        ("R16", "Octavos de Final"),
+        ("QF", "Cuartos de Final"),
+        ("SF", "Semifinales"),
+        ("Third", "Partido por el Tercer Puesto"),
+        ("Final", "Gran Final"),
+    ]
+    pending_tokens = ["Por definir", "Mejor", "Esperando"]
+
+    for r_key, r_name in rondas:
+        with st.expander(f"➔ {r_name}", expanded=r_key == "R32"):
+            with st.form(f"form_admin_ko_{r_key}"):
+                for match in bracket_dict[r_key]:
+                    m_id = f"{r_key}_{match['id']}"
+                    cur = ko_results.get(m_id, {"l": 0, "v": 0, "avanza": "L"})
+                    match_number = match.get("match_number")
+                    blocked = (
+                        any(token in match["L_team"] for token in pending_tokens)
+                        or any(token in match["V_team"] for token in pending_tokens)
+                    )
+
+                    c0, c1, c2, c3, c4, c5, c6, c7 = st.columns([1.2, 0.9, 3, 1, 0.7, 1, 3, 2.2])
+                    c0.checkbox(
+                        "Finalizado",
+                        value=m_id in ko_results,
+                        key=f"admin_ko_played_{m_id}",
+                        disabled=blocked,
+                    )
+                    c1.write(f"**M{match_number}**" if match_number else "")
+                    c2.write(f"**{match['L_team']}**")
+                    c3.number_input(
+                        "",
+                        0,
+                        15,
+                        cur["l"],
+                        key=f"admin_ko_l_{m_id}",
+                        disabled=blocked,
+                        label_visibility="collapsed",
+                    )
+                    c4.write("vs")
+                    c5.number_input(
+                        "",
+                        0,
+                        15,
+                        cur["v"],
+                        key=f"admin_ko_v_{m_id}",
+                        disabled=blocked,
+                        label_visibility="collapsed",
+                    )
+                    c6.write(f"**{match['V_team']}**")
+                    if blocked:
+                        c7.caption("Esperando cruces...")
+                    else:
+                        team_options = [match["L_team"], match["V_team"]]
+                        current_avanza = cur.get("avanza", "L")
+                        c7.selectbox(
+                            "Pasa si empate",
+                            team_options,
+                            index=0 if current_avanza == "L" else 1,
+                            key=f"admin_ko_av_{m_id}",
+                        )
+
+                if st.form_submit_button(f"Guardar resultados de {r_name}"):
+                    for match in bracket_dict[r_key]:
+                        m_id = f"{r_key}_{match['id']}"
+                        blocked = (
+                            any(token in match["L_team"] for token in pending_tokens)
+                            or any(token in match["V_team"] for token in pending_tokens)
+                        )
+                        if blocked:
+                            continue
+
+                        if st.session_state[f"admin_ko_played_{m_id}"]:
+                            l_score = st.session_state[f"admin_ko_l_{m_id}"]
+                            v_score = st.session_state[f"admin_ko_v_{m_id}"]
+                            if l_score > v_score:
+                                avanza = "L"
+                            elif l_score < v_score:
+                                avanza = "V"
+                            else:
+                                avanza = "L" if st.session_state[f"admin_ko_av_{m_id}"] == match["L_team"] else "V"
+                            ko_results[m_id] = {"l": l_score, "v": v_score, "avanza": avanza}
+                        else:
+                            ko_results.pop(m_id, None)
+
+                    save_data(data)
+                    st.success(f"Resultados guardados para {r_name}.")
+                    st.rerun()
+
 def UI_prediccion_bracket_oficial(player_data, key_prefix, read_only=False):
     official_r32 = data["real_results"].get("official_r32", {})
     if not official_bracket_is_ready(official_r32):
@@ -2327,7 +2419,7 @@ with t_real:
             if not official_bracket_is_ready(data["real_results"].get("official_r32", {})):
                 st.warning("Carga el bracket oficial R32 antes de publicar resultados de fase eliminatoria.")
             real_bracket = resolve_real_bracket(data["real_results"])
-            UI_fase_eliminatoria(real_bracket, data["real_results"]["ko_results"], "r_ko")
+            UI_admin_ko_results(real_bracket, data["real_results"]["ko_results"])
         else:
             UI_admin_participants(user)
 
