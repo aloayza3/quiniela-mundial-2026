@@ -2033,6 +2033,7 @@ def render_prediction_hit_legend():
                 padding: 0.55rem 0.65rem;
                 margin: 0.35rem 0;
                 background: #ffffff;
+                color: #172033;
             }
             .prediction-match-card.prediction-hit-exact {
                 border-color: #86efac;
@@ -2047,15 +2048,21 @@ def render_prediction_hit_legend():
             .prediction-team-left {
                 text-align: right;
                 font-weight: 700;
+                color: #111827;
+                overflow-wrap: anywhere;
             }
             .prediction-team-right {
                 text-align: left;
                 font-weight: 700;
+                color: #111827;
+                overflow-wrap: anywhere;
             }
             .prediction-score {
                 min-width: 1.7rem;
                 border-radius: 6px;
-                background: rgba(15, 23, 42, 0.08);
+                background: #ffffff;
+                border: 1px solid #94a3b8;
+                color: #0f172a;
                 padding: 0.18rem 0.35rem;
                 text-align: center;
                 font-weight: 800;
