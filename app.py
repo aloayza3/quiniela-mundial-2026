@@ -1758,6 +1758,62 @@ def UI_prediccion_bracket_oficial(player_data, key_prefix, read_only=False):
     st.metric(label="🏆 CAMPEÓN PREDICHO EN BRACKET OFICIAL", value=official_bracket["Campeon"])
     UI_fase_eliminatoria(official_bracket, storage_path, key_prefix, read_only=read_only)
 
+def official_bracket_prediction_match_ids():
+    return (
+        [f"R32_{i}" for i in range(16)]
+        + [f"R16_{i}" for i in range(8)]
+        + [f"QF_{i}" for i in range(4)]
+        + [f"SF_{i}" for i in range(2)]
+        + ["Third_0", "Final_0"]
+    )
+
+def UI_admin_official_prediction_status(official_r32):
+    st.subheader("📋 Estado de Predicciones del Bracket Oficial")
+    users = data.get("users", {})
+    if not users:
+        st.info("No hay jugadores registrados todavía.")
+        return
+
+    expected_match_ids = set(official_bracket_prediction_match_ids())
+    total_expected = len(expected_match_ids)
+    rows = []
+    submitted_count = 0
+    complete_count = 0
+    official_ready = official_bracket_is_ready(official_r32)
+
+    for player_name in sorted(users.keys(), key=str.casefold):
+        player_data = users[player_name]
+        predictions = player_data.get("official_bracket_predictions", {})
+        predicted_match_count = len(expected_match_ids.intersection(predictions.keys()))
+        has_prediction = predicted_match_count > 0
+        is_complete = predicted_match_count == total_expected
+        submitted_count += 1 if has_prediction else 0
+        complete_count += 1 if is_complete else 0
+
+        champion = "Pendiente"
+        if official_ready and has_prediction:
+            champion = resolve_official_bracket(official_r32, predictions).get("Campeon", "Por definir")
+
+        if is_complete:
+            status = "Completa"
+        elif has_prediction:
+            status = "Iniciada"
+        else:
+            status = "Sin predicción"
+
+        rows.append({
+            "Jugador": player_name,
+            "Estado": status,
+            "Partidos guardados": f"{predicted_match_count}/{total_expected}",
+            "Campeón predicho": champion,
+        })
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Jugadores con predicción", f"{submitted_count}/{len(users)}")
+    c2.metric("Predicciones completas", f"{complete_count}/{len(users)}")
+    c3.metric("Partidos requeridos", total_expected)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
 def UI_admin_official_r32():
     st.subheader("🧩 Bracket Oficial de Dieciseisavos")
     options = ["Por definir"] + get_all_teams()
@@ -1823,6 +1879,9 @@ def UI_admin_official_r32():
                 else:
                     st.warning("Bracket oficial guardado parcialmente.")
                 st.rerun()
+
+    st.divider()
+    UI_admin_official_prediction_status(official_r32)
 
 def build_group_match_rows(group_name, group_results):
     rows = []
@@ -2326,6 +2385,31 @@ with t_puntos:
         if user_bracket["Campeon"] == real_bracket["Campeon"] and real_bracket["Campeon"] != "Por definir":
             pts += 32
         return pts
+
+    def calcular_aciertos_etapas_bracket(user_bracket, real_bracket):
+        real_champion = real_bracket.get("Campeon", "Por definir")
+        champion_hit = (
+            real_champion != "Por definir"
+            and user_bracket.get("Campeon") == real_champion
+        )
+        return {
+            "Equipos R16": len(extraer_equipos(user_bracket["R16"]).intersection(extraer_equipos(real_bracket["R16"]))),
+            "Equipos R8": len(extraer_equipos(user_bracket["QF"]).intersection(extraer_equipos(real_bracket["QF"]))),
+            "Equipos Semifinal": len(extraer_equipos(user_bracket["SF"]).intersection(extraer_equipos(real_bracket["SF"]))),
+            "Equipos Final": len(extraer_equipos(user_bracket["Final"]).intersection(extraer_equipos(real_bracket["Final"]))),
+            "Campeón": "Sí" if champion_hit else "No",
+        }
+
+    def resolve_user_full_bracket(user_obj):
+        u_grp = user_obj.get("group_predictions", {})
+        u_tables, _, df_u_thirds = get_all_group_tables(u_grp)
+        return resolve_full_bracket(u_tables, df_u_thirds, user_obj.get("ko_predictions", {}))
+
+    def resolve_user_official_bracket(user_obj, real_obj):
+        return resolve_official_bracket(
+            real_obj.get("official_r32", {}),
+            user_obj.get("official_bracket_predictions", {}),
+        )
 	    
     def calcular_aciertos_grupos(user_obj, real_obj):
         stats = {"tendencias": 0, "exactos": 0, "puntos": 0}
@@ -2400,12 +2484,8 @@ with t_puntos:
 
     def calcular_puntos_totales(user_obj, real_obj, group_stats=None):
         pts = (group_stats or calcular_aciertos_grupos(user_obj, real_obj))["puntos"]
-        u_grp = user_obj.get("group_predictions", {})
-
-        u_tables, _, df_u_thirds = get_all_group_tables(u_grp)
-        
         rb = resolve_real_bracket(real_obj)
-        ub = resolve_full_bracket(u_tables, df_u_thirds, user_obj.get("ko_predictions", {}))
+        ub = resolve_user_full_bracket(user_obj)
         pts += calcular_puntos_bracket(ub, rb)
         return pts
 
@@ -2415,28 +2495,43 @@ with t_puntos:
             return 0
 
         rb = resolve_official_bracket(official_r32, real_obj.get("ko_results", {}))
-        ub = resolve_official_bracket(official_r32, user_obj.get("official_bracket_predictions", {}))
+        ub = resolve_user_official_bracket(user_obj, real_obj)
         return calcular_aciertos_r32_bracket_oficial(user_obj, real_obj)["puntos"] + calcular_puntos_bracket(ub, rb)
 	
     ranking_full = []
     ranking_official = []
+    real_full_bracket = resolve_real_bracket(data["real_results"])
+    official_ready = official_bracket_is_ready(data["real_results"].get("official_r32", {}))
+    real_official_bracket = (
+        resolve_official_bracket(data["real_results"].get("official_r32", {}), data["real_results"].get("ko_results", {}))
+        if official_ready
+        else None
+    )
     for u_name, u_data in data["users"].items():
         group_stats = calcular_aciertos_grupos(u_data, data["real_results"])
         full_goal_stats = calcular_goles_torneo_completo(u_data, data["real_results"])
+        user_full_bracket = resolve_user_full_bracket(u_data)
+        full_stage_stats = calcular_aciertos_etapas_bracket(user_full_bracket, real_full_bracket)
         ranking_full.append({
             "Jugador": u_name,
             "Tendencias Correctas": group_stats["tendencias"],
             "Marcadores Exactos": group_stats["exactos"],
+            **full_stage_stats,
             "Goles Predichos/Reales": full_goal_stats["display"],
             "Diferencia Goles": full_goal_stats["difference"],
             "Puntos Totales": calcular_puntos_totales(u_data, data["real_results"], group_stats),
         })
         r32_stats = calcular_aciertos_r32_bracket_oficial(u_data, data["real_results"])
         official_goal_stats = calcular_goles_bracket_oficial(u_data, data["real_results"])
+        official_stage_stats = {}
+        if official_ready:
+            user_official_bracket = resolve_user_official_bracket(u_data, data["real_results"])
+            official_stage_stats = calcular_aciertos_etapas_bracket(user_official_bracket, real_official_bracket)
         ranking_official.append({
             "Jugador": u_name,
             "Tendencias R32": r32_stats["tendencias"],
             "Marcadores Exactos R32": r32_stats["exactos"],
+            **official_stage_stats,
             "Goles Predichos/Reales": official_goal_stats["display"],
             "Diferencia Goles": official_goal_stats["difference"],
             "Puntos Bracket Oficial": calcular_puntos_bracket_oficial(u_data, data["real_results"]),
