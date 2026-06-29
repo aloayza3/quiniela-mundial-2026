@@ -2462,7 +2462,13 @@ with t_real:
             real_bracket = resolve_real_bracket_for_display(data["real_results"])
             st.caption("Bracket oficial provisional calculado con las posiciones actuales de grupos. Solo usa grupos que ya tienen al menos un resultado; los cruces de terceros siguen la tabla Annex C cuando hay ocho terceros provisionales.")
         st.success(f"🏆 CAMPEÓN REAL ACTUAL: {real_bracket['Campeon']}")
-        UI_fase_eliminatoria(real_bracket, {}, "view_real_ko", read_only=True, team_statuses=real_team_statuses)
+        UI_fase_eliminatoria(
+            real_bracket,
+            data["real_results"].get("ko_results", {}),
+            "view_real_ko",
+            read_only=True,
+            team_statuses=real_team_statuses,
+        )
     else:
         UI_real_group_simulator(data["real_results"]["group_results"])
 
