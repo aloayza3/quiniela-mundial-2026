@@ -2425,9 +2425,13 @@ with t_real:
 
     st.divider()
 
+    real_view_options = ["Partidos de Grupos", "Tablas de Posiciones", "Llave Eliminatoria"]
+    if st.session_state.get("real_public_view") not in real_view_options:
+        st.session_state["real_public_view"] = real_view_options[0]
+
     real_view = st.radio(
         "Visualizar datos reales:",
-        ["Partidos de Grupos", "Tablas de Posiciones", "Llave Eliminatoria", "Simulador"],
+        real_view_options,
         horizontal=True,
         key="real_public_view",
     )
@@ -2469,8 +2473,6 @@ with t_real:
             read_only=True,
             team_statuses=real_team_statuses,
         )
-    else:
-        UI_real_group_simulator(data["real_results"]["group_results"])
 
 # ================= TAB 4: POSICIONES Y REGLAS =================
 with t_puntos:
@@ -2607,6 +2609,250 @@ with t_puntos:
         rb = resolve_official_bracket(official_r32, real_obj.get("ko_results", {}))
         ub = resolve_user_official_bracket(user_obj, real_obj)
         return calcular_aciertos_r32_bracket_oficial(user_obj, real_obj)["puntos"] + calcular_puntos_bracket(ub, rb)
+
+    def result_for_winner_side(side):
+        if side == "L":
+            return {"l": 1, "v": 0, "avanza": "L"}
+        return {"l": 0, "v": 1, "avanza": "V"}
+
+    def real_obj_with_ko(real_obj, ko_results):
+        scenario_real = dict(real_obj)
+        scenario_real["ko_results"] = dict(ko_results)
+        return scenario_real
+
+    def enumerate_pending_ko_winner_scenarios(real_obj, max_scenarios=4096):
+        round_order = [
+            ("R32", "Dieciseisavos"),
+            ("R16", "Octavos"),
+            ("QF", "Cuartos"),
+            ("SF", "Semifinales"),
+            ("Third", "Tercer Puesto"),
+            ("Final", "Final"),
+        ]
+        scenarios = []
+        base_ko = dict(real_obj.get("ko_results", {}))
+
+        def bracket_for(ko_results):
+            return resolve_real_bracket(real_obj_with_ko(real_obj, ko_results))
+
+        def visit(round_index, ko_results, picks):
+            if len(scenarios) >= max_scenarios:
+                return False
+            if round_index >= len(round_order):
+                scenarios.append({"ko_results": dict(ko_results), "picks": list(picks)})
+                return True
+
+            round_key, round_name = round_order[round_index]
+            bracket = bracket_for(ko_results)
+            next_match = None
+            for match in bracket.get(round_key, []):
+                match_id = f"{round_key}_{match['id']}"
+                if match_id in ko_results:
+                    continue
+                if team_is_pending(match["L_team"]) or team_is_pending(match["V_team"]):
+                    continue
+                next_match = match
+                break
+
+            if next_match is None:
+                return visit(round_index + 1, ko_results, picks)
+
+            match_id = f"{round_key}_{next_match['id']}"
+            for side in ["L", "V"]:
+                winner = next_match["L_team"] if side == "L" else next_match["V_team"]
+                projected_ko = dict(ko_results)
+                projected_ko[match_id] = result_for_winner_side(side)
+                pick = {
+                    "order": len(picks) + 1,
+                    "match_id": match_id,
+                    "match_number": next_match.get("match_number"),
+                    "label": f"M{next_match.get('match_number')}" if next_match.get("match_number") else round_name,
+                    "round": round_name,
+                    "winner": winner,
+                    "matchup": f"{next_match['L_team']} vs {next_match['V_team']}",
+                }
+                if not visit(round_index, projected_ko, picks + [pick]):
+                    return False
+            return True
+
+        completed = visit(0, base_ko, [])
+        return scenarios, not completed
+
+    def points_ranking_for_real_obj(real_obj, table_kind):
+        rows = []
+        for player_name, user_data in data["users"].items():
+            if table_kind == "official":
+                points = calcular_puntos_bracket_oficial(user_data, real_obj)
+            else:
+                group_stats = calcular_aciertos_grupos(user_data, real_obj)
+                points = calcular_puntos_totales(user_data, real_obj, group_stats)
+            rows.append({"Jugador": player_name, "Puntos": points})
+
+        rows.sort(key=lambda row: (-row["Puntos"], row["Jugador"].casefold()))
+        previous_points = None
+        current_position = 0
+        for idx, row in enumerate(rows, start=1):
+            if row["Puntos"] != previous_points:
+                current_position = idx
+                previous_points = row["Puntos"]
+            row["Puesto"] = current_position
+        return rows
+
+    def summarize_pick_list(picks, max_items=8):
+        if not picks:
+            return "No quedan partidos pendientes"
+        ordered_picks = sorted(picks, key=lambda pick: pick["order"])
+        items = [
+            f"{pick['label']}: gana {pick['winner']}"
+            for pick in ordered_picks[:max_items]
+        ]
+        if len(ordered_picks) > max_items:
+            items.append(f"+{len(ordered_picks) - max_items} más")
+        return "; ".join(items)
+
+    def common_required_picks(scenarios, max_items=8):
+        if not scenarios:
+            return "Sin escenarios"
+
+        total = len(scenarios)
+        picks_by_match = {}
+        for scenario in scenarios:
+            for pick in scenario["picks"]:
+                picks_by_match.setdefault(pick["match_id"], []).append(pick)
+
+        common = []
+        for picks in picks_by_match.values():
+            if len(picks) != total:
+                continue
+            winners = {pick["winner"] for pick in picks}
+            if len(winners) == 1:
+                sample = picks[0]
+                common.append((sample["order"], f"{sample['label']}: gana {sample['winner']}"))
+
+        if not common:
+            return "No hay resultado obligatorio común"
+
+        common.sort()
+        items = [text for _, text in common[:max_items]]
+        if len(common) > max_items:
+            items.append(f"+{len(common) - max_items} más")
+        return "; ".join(items)
+
+    def build_player_path_analysis(real_obj, table_kind):
+        scenarios, truncated = enumerate_pending_ko_winner_scenarios(real_obj)
+        player_names = sorted(data["users"].keys(), key=str.casefold)
+        analysis = {
+            player_name: {
+                "best_position": None,
+                "max_points": 0,
+                "win_scenarios": [],
+                "top3_scenarios": [],
+            }
+            for player_name in player_names
+        }
+
+        for scenario in scenarios:
+            scenario_real = real_obj_with_ko(real_obj, scenario["ko_results"])
+            ranking_rows = points_ranking_for_real_obj(scenario_real, table_kind)
+            for row in ranking_rows:
+                player_result = analysis[row["Jugador"]]
+                player_result["best_position"] = (
+                    row["Puesto"]
+                    if player_result["best_position"] is None
+                    else min(player_result["best_position"], row["Puesto"])
+                )
+                player_result["max_points"] = max(player_result["max_points"], row["Puntos"])
+                if row["Puesto"] == 1:
+                    player_result["win_scenarios"].append(scenario)
+                if row["Puesto"] <= 3:
+                    player_result["top3_scenarios"].append(scenario)
+
+        current_rows = points_ranking_for_real_obj(real_obj, table_kind)
+        current_by_player = {row["Jugador"]: row for row in current_rows}
+        total_scenarios = len(scenarios)
+        summary_rows = []
+        for player_name in player_names:
+            player_result = analysis[player_name]
+            win_count = len(player_result["win_scenarios"])
+            top3_count = len(player_result["top3_scenarios"])
+            if win_count:
+                status = "Puede ganar"
+            elif top3_count:
+                status = "Puede ser Top 3"
+            else:
+                status = "Sin opciones Top 3"
+
+            example_scenario = (
+                player_result["win_scenarios"][0]
+                if win_count
+                else (player_result["top3_scenarios"][0] if top3_count else None)
+            )
+            summary_rows.append({
+                "Jugador": player_name,
+                "Puesto actual por puntos": current_by_player.get(player_name, {}).get("Puesto", "-"),
+                "Puntos actuales": current_by_player.get(player_name, {}).get("Puntos", 0),
+                "Mejor puesto posible por puntos": player_result["best_position"] or "-",
+                "Puntos máximos": player_result["max_points"],
+                "Escenarios para ganar": f"{win_count}/{total_scenarios}",
+                "Escenarios Top 3": f"{top3_count}/{total_scenarios}",
+                "Estado": status,
+                "Necesario para ganar": common_required_picks(player_result["win_scenarios"]) if win_count else "Sin camino ganador",
+                "Ejemplo de camino": summarize_pick_list(example_scenario["picks"]) if example_scenario else "Sin camino Top 3",
+            })
+
+        summary_rows.sort(
+            key=lambda row: (
+                row["Mejor puesto posible por puntos"] if isinstance(row["Mejor puesto posible por puntos"], int) else 999,
+                -row["Puntos máximos"],
+                str(row["Jugador"]).casefold(),
+            )
+        )
+        return summary_rows, analysis, total_scenarios, truncated
+
+    def UI_player_path_tool(real_obj, official_ready):
+        st.subheader("🧭 Qué necesita cada jugador")
+        st.caption(
+            "Simula ganadores de los partidos eliminatorios pendientes. "
+            "Las opciones se calculan por puntos; si varios jugadores terminan empatados, "
+            "el desempate de goles todavía dependerá de los marcadores reales."
+        )
+        table_label = st.radio(
+            "Tabla a analizar:",
+            ["Predicción 1: Torneo Completo", "Predicción 2: Bracket Oficial"],
+            horizontal=True,
+            key="path_tool_table_kind",
+        )
+        table_kind = "official" if table_label.startswith("Predicción 2") else "full"
+        if table_kind == "official" and not official_ready:
+            st.info("El análisis del bracket oficial estará disponible cuando el administrador cargue el R32 oficial completo.")
+            return
+
+        summary_rows, analysis, total_scenarios, truncated = build_player_path_analysis(real_obj, table_kind)
+        if total_scenarios == 0:
+            st.warning("No se pudieron generar escenarios porque todavía hay cruces pendientes por definir.")
+            return
+
+        st.metric("Escenarios de ganadores evaluados", f"{total_scenarios}{'+' if truncated else ''}")
+        if truncated:
+            st.warning("El análisis se cortó al llegar al límite de escenarios; los conteos mostrados son parciales.")
+
+        st.dataframe(pd.DataFrame(summary_rows), hide_index=True, use_container_width=True)
+
+        selectable_players = [row["Jugador"] for row in summary_rows]
+        if not selectable_players:
+            return
+        selected_player = st.selectbox("Detalle por jugador:", selectable_players, key="path_tool_player_detail")
+        selected_analysis = analysis[selected_player]
+        if selected_analysis["win_scenarios"]:
+            st.write("**Resultados comunes en todos sus caminos ganadores:**")
+            st.write(common_required_picks(selected_analysis["win_scenarios"], max_items=20))
+            st.write("**Ejemplo de camino ganador:**")
+            st.write(summarize_pick_list(selected_analysis["win_scenarios"][0]["picks"], max_items=20))
+        elif selected_analysis["top3_scenarios"]:
+            st.write("**No tiene camino ganador por puntos, pero sí caminos al Top 3. Ejemplo:**")
+            st.write(summarize_pick_list(selected_analysis["top3_scenarios"][0]["picks"], max_items=20))
+        else:
+            st.write("No aparece en el Top 3 en los escenarios evaluados.")
 	
     ranking_full = []
     ranking_official = []
@@ -2670,7 +2916,10 @@ with t_puntos:
         st.table(df_rank_official)
     else:
         st.info("No hay predicciones de bracket oficial aún.")
-        
+
+    st.divider()
+    UI_player_path_tool(real_results_for_scoring, official_ready)
+
     st.divider()
     
     st.subheader("📖 Explicación del Criterio de Puntos")
