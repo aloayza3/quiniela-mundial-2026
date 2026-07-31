@@ -2550,6 +2550,8 @@ with t_puntos:
 
     def build_goal_total_stats(predicted_goals, real_goals):
         return {
+            "predicted": predicted_goals,
+            "real": real_goals,
             "display": f"{predicted_goals} / {real_goals}",
             "difference": abs(predicted_goals - real_goals),
         }
@@ -2853,9 +2855,90 @@ with t_puntos:
             st.write(summarize_pick_list(selected_analysis["top3_scenarios"][0]["picks"], max_items=20))
         else:
             st.write("No aparece en el Top 3 en los escenarios evaluados.")
+
+    def podium_rows(ranking_rows, points_key):
+        sorted_rows = sorted(
+            ranking_rows,
+            key=lambda row: (-row[points_key], row["Diferencia Goles"], row["Jugador"].casefold()),
+        )
+        return [
+            {
+                "Puesto": idx,
+                "Jugador": row["Jugador"],
+                "Puntos": row[points_key],
+                "Dif. goles": row["Diferencia Goles"],
+            }
+            for idx, row in enumerate(sorted_rows[:3], start=1)
+        ]
+
+    def best_rows(rows, metric_key, prefer="max"):
+        if not rows:
+            return []
+        values = [row[metric_key] for row in rows]
+        target = max(values) if prefer == "max" else min(values)
+        return [row for row in rows if row[metric_key] == target]
+
+    def player_names(rows):
+        return ", ".join(row["Jugador"] for row in sorted(rows, key=lambda row: row["Jugador"].casefold()))
+
+    def render_results_highlights(ranking_full, ranking_official, combined_mentions, official_ready):
+        st.subheader("🏅 Ganadores y menciones")
+
+        c_full, c_official = st.columns(2)
+        with c_full:
+            st.markdown("**Predicción 1: Torneo Completo**")
+            if ranking_full:
+                st.table(pd.DataFrame(podium_rows(ranking_full, "Puntos Totales")))
+            else:
+                st.info("Sin datos.")
+
+        with c_official:
+            st.markdown("**Predicción 2: Bracket Oficial**")
+            if official_ready and ranking_official:
+                st.table(pd.DataFrame(podium_rows(ranking_official, "Puntos Bracket Oficial")))
+            elif not official_ready:
+                st.info("Pendiente.")
+            else:
+                st.info("Sin datos.")
+
+        if not combined_mentions:
+            return
+
+        closest_goals = best_rows(combined_mentions, "Diferencia Goles Total", prefer="min")
+        most_exact = best_rows(combined_mentions, "Marcadores Exactos Totales", prefer="max")
+        most_tendencies = best_rows(combined_mentions, "Tendencias Totales", prefer="max")
+        worst_score_value = min(row["Puntos Combinados"] for row in combined_mentions)
+        worst_candidates = [row for row in combined_mentions if row["Puntos Combinados"] == worst_score_value]
+        worst_goal_diff = max(row["Diferencia Goles Total"] for row in worst_candidates)
+        worst_overall = [row for row in worst_candidates if row["Diferencia Goles Total"] == worst_goal_diff]
+
+        mention_rows = [
+            {
+                "Mención": "Más cerca en goles totales Predicción 1",
+                "Jugador(es)": player_names(closest_goals),
+                "Dato": f"{closest_goals[0]['Goles Predichos Totales']} / {closest_goals[0]['Goles Reales Totales']} goles, dif. {closest_goals[0]['Diferencia Goles Total']}",
+            },
+            {
+                "Mención": "Más marcadores exactos",
+                "Jugador(es)": player_names(most_exact),
+                "Dato": f"{most_exact[0]['Marcadores Exactos Totales']} exactos",
+            },
+            {
+                "Mención": "Más tendencias correctas",
+                "Jugador(es)": player_names(most_tendencies),
+                "Dato": f"{most_tendencies[0]['Tendencias Totales']} tendencias",
+            },
+            {
+                "Mención": "Peor desempeño global",
+                "Jugador(es)": player_names(worst_overall),
+                "Dato": f"{worst_overall[0]['Puntos Combinados']} pts, dif. goles {worst_overall[0]['Diferencia Goles Total']}",
+            },
+        ]
+        st.table(pd.DataFrame(mention_rows))
 	
     ranking_full = []
     ranking_official = []
+    combined_mentions = []
     real_full_bracket = resolve_real_bracket(real_results_for_scoring)
     official_ready = official_bracket_is_ready(real_results_for_scoring.get("official_r32", {}))
     real_official_bracket = (
@@ -2868,6 +2951,7 @@ with t_puntos:
         full_goal_stats = calcular_goles_torneo_completo(u_data, real_results_for_scoring)
         user_full_bracket = resolve_user_full_bracket(u_data)
         full_stage_stats = calcular_aciertos_etapas_bracket(user_full_bracket, real_full_bracket)
+        full_points = calcular_puntos_totales(u_data, real_results_for_scoring, group_stats)
         ranking_full.append({
             "Jugador": u_name,
             "Tendencias Correctas": group_stats["tendencias"],
@@ -2875,7 +2959,7 @@ with t_puntos:
             **full_stage_stats,
             "Goles Predichos/Reales": full_goal_stats["display"],
             "Diferencia Goles": full_goal_stats["difference"],
-            "Puntos Totales": calcular_puntos_totales(u_data, real_results_for_scoring, group_stats),
+            "Puntos Totales": full_points,
         })
         r32_stats = calcular_aciertos_r32_bracket_oficial(u_data, real_results_for_scoring)
         official_goal_stats = calcular_goles_bracket_oficial(u_data, real_results_for_scoring)
@@ -2883,6 +2967,7 @@ with t_puntos:
         if official_ready:
             user_official_bracket = resolve_user_official_bracket(u_data, real_results_for_scoring)
             official_stage_stats = calcular_aciertos_etapas_bracket(user_official_bracket, real_official_bracket)
+        official_points = calcular_puntos_bracket_oficial(u_data, real_results_for_scoring)
         ranking_official.append({
             "Jugador": u_name,
             "Tendencias R32": r32_stats["tendencias"],
@@ -2890,8 +2975,19 @@ with t_puntos:
             **official_stage_stats,
             "Goles Predichos/Reales": official_goal_stats["display"],
             "Diferencia Goles": official_goal_stats["difference"],
-            "Puntos Bracket Oficial": calcular_puntos_bracket_oficial(u_data, real_results_for_scoring),
+            "Puntos Bracket Oficial": official_points,
         })
+        combined_mentions.append({
+            "Jugador": u_name,
+            "Goles Predichos Totales": full_goal_stats["predicted"],
+            "Goles Reales Totales": full_goal_stats["real"],
+            "Diferencia Goles Total": full_goal_stats["difference"],
+            "Marcadores Exactos Totales": group_stats["exactos"] + r32_stats["exactos"],
+            "Tendencias Totales": group_stats["tendencias"] + r32_stats["tendencias"],
+            "Puntos Combinados": full_points + official_points,
+        })
+
+    render_results_highlights(ranking_full, ranking_official, combined_mentions, official_ready)
 	        
     st.subheader("Predicción 1: Torneo Completo")
     if ranking_full:
